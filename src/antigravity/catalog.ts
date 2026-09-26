@@ -367,8 +367,9 @@ export function injectRelayModels(
 export function buildAntigravityRoutes(
   resolvedFavorites: ResolvedFavorite[],
   maxRoutes = MAX_MODEL_CATALOG,
-  opts: { effortSlider?: boolean } = {},
+  opts: { effortMode?: AntigravityEffortMode } = {},
 ): AntigravityRoute[] {
+  const effortMode = opts.effortMode ?? 'rows';
   const routes: AntigravityRoute[] = [];
   const seen = new Set<string>();
 
@@ -410,10 +411,18 @@ export function buildAntigravityRoutes(
       contextWindow,
     });
     const route = routes.pop()!;
-    routes.push(...effortVariants(route, favModel, routes.length === 0, opts.effortSlider ?? false));
+    routes.push(...effortVariants(route, favModel, routes.length === 0, effortMode));
   }
 
-  return applyUniqueAntigravityRouteLabels(routes.slice(0, maxRoutes));
+  const labeled = applyUniqueAntigravityRouteLabels(routes.slice(0, maxRoutes));
+  if (effortMode !== 'submenu') return labeled;
+  // The app folds labels ending "(Low)"/"(Medium)"/"(High)" into one submenu row (native's name rule).
+  // applyUnique appends " (Relay - Provider)", so move the level after that suffix for the fold to match.
+  return labeled.map(route => {
+    if (!route.reasoningEffort || !['low', 'medium', 'high'].includes(route.reasoningEffort)) return route;
+    const label = effortLabel(route.reasoningEffort);
+    return { ...route, displayName: `${route.displayName.replace(` ${label} (Relay`, ' (Relay')} (${label})` };
+  });
 }
 
 /** Levels shown for a non-launch model: medium and the two above it, topped up from below. */
@@ -430,23 +439,32 @@ export function effortLabel(level: string): string {
   return level === 'xhigh' ? 'XHigh' : level.charAt(0).toUpperCase() + level.slice(1);
 }
 
-/** The levels agy folds into one picker row with its effort slider (verified on agy 1.2.11). */
+/**
+ * How each Antigravity surface exposes a model's effort levels in its picker:
+ * - `slider` (agy): low/medium/high/max fold into one row with agy's 4-position slider; XHigh is a separate row.
+ * - `submenu` (app): low/medium/high fold into one hover submenu; XHigh/Max are separate rows.
+ * - `rows` (IDE): one plain row per level — the IDE's submenu is clipped by its scrolling model list.
+ */
+export type AntigravityEffortMode = 'slider' | 'submenu' | 'rows';
+
+/** Levels the slider (agy) and submenu (app) fold together, verified live on agy 1.2.11 / the app. */
 const AGY_SLIDER_LEVELS = ['low', 'medium', 'high', 'max'];
-/** The slider has no XHigh position, so it gets its own agy row when a model has it. */
+/** XHigh has no slider position and does not fold in the submenu, so it gets its own row when supported. */
 const AGY_EXTRA_LEVELS = ['xhigh'];
 
 /**
- * The IDE and app have no effort control, so a model is listed once per effort
- * level: every level for the launch model, three for favorites. agy
- * (`effortSlider`) folds low/medium/high/max entries into one row with a slider,
- * so every model gets those it supports, plus an XHigh row where supported (None
- * is left out). Models without adjustable effort keep a single entry.
+ * Expand a route into one route per effort level for its surface. `rows` (IDE)
+ * lists every level for the launch model and three for favorites, each a plain
+ * row. `slider` (agy) and `submenu` (app) list the same curated set
+ * (low/medium/high/max + XHigh) for every model; the fold itself is driven by the
+ * labels (slider row named plainly, submenu rows renamed in buildAntigravityRoutes).
+ * Models without adjustable effort keep a single entry.
  */
 function effortVariants(
   route: AntigravityRoute,
   model: unknown,
   isLaunchModel: boolean,
-  effortSlider: boolean,
+  effortMode: AntigravityEffortMode,
 ): AntigravityRoute[] {
   // Cloud Code routes are forwarded to Google as-is; Relay's effort options never apply.
   if (route.modelFormat === 'cloud-code') return [route];
@@ -469,13 +487,14 @@ function effortVariants(
     return index < 0 ? EFFORT_RANK.length : index;
   };
   const ordered = [...caps.levels].sort((a, b) => rank(a) - rank(b));
-  const levels = effortSlider
+  const folded = effortMode === 'slider' || effortMode === 'submenu';
+  const levels = folded
     ? ordered.filter(level => AGY_SLIDER_LEVELS.includes(level) || AGY_EXTRA_LEVELS.includes(level))
     : isLaunchModel ? ordered : favoriteEffortLevels(ordered, caps.defaultLevel);
   if (levels.length < 2) return [route];
   const baseName = routeBaseModelName(route);
   // agy names the slider row after its first entry, so that entry carries no level.
-  const sliderRowLevel = effortSlider ? levels.find(level => AGY_SLIDER_LEVELS.includes(level)) : undefined;
+  const sliderRowLevel = effortMode === 'slider' ? levels.find(level => AGY_SLIDER_LEVELS.includes(level)) : undefined;
   return levels.map(level => ({
     ...route,
     catalogId: `${route.catalogId}__effort_${level}`,

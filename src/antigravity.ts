@@ -7,7 +7,7 @@ import { loadPreferences, savePreferences } from './config.js';
 import { fetchProviderCatalog, providersForPicker } from './provider-catalog.js';
 import { providersForTarget } from './target-compatibility.js';
 import { detectConflicts, buildAntigravityChildEnv } from './env.js';
-import { buildAntigravityRoutes } from './antigravity/catalog.js';
+import { buildAntigravityRoutes, type AntigravityEffortMode } from './antigravity/catalog.js';
 import { startCloudCodeGateway, type CloudCodeGatewayHandle } from './antigravity/cloud-code-gateway.js';
 import { evaluateAgySwitchCompatibility } from './antigravity/slot-registry.js';
 import { resolveAntigravityLaunchRoutes } from './antigravity/launch-routes.js';
@@ -257,7 +257,7 @@ async function resolveAndBuildRoutes(
     maxRoutes: number;
     pauseForCapacityWarning: boolean;
     childArgs: string[];
-    agyEffortSlider: boolean;
+    effortMode: AntigravityEffortMode;
   },
 ): Promise<{ routes: ReturnType<typeof buildAntigravityRoutes>; apiKey: string } | null> {
   const result = await resolveAntigravityLaunchRoutes({
@@ -266,7 +266,7 @@ async function resolveAndBuildRoutes(
     allProviders,
     favorites: prefs.favoriteModels ?? [],
     maxRoutes: opts.maxRoutes,
-    effortSlider: opts.agyEffortSlider,
+    effortMode: opts.effortMode,
   });
   if (!result) {
     p.log.error(`No credential for ${provider.name}. Run: relay-ai providers auth ${provider.id} or add an API key.`);
@@ -274,11 +274,13 @@ async function resolveAndBuildRoutes(
   }
 
   if (result.routes.length > 1) {
-    p.log.info(
-      opts.agyEffortSlider
-        ? `Favorites mode active — ${result.routes.length} entries; each model's low/medium/high/max share one row with an effort slider.`
-        : `Favorites mode active — Antigravity picker will show ${result.routes.length} entries (effort levels are listed separately).`,
-    );
+    const effortNote =
+      opts.effortMode === 'slider'
+        ? `each model's low/medium/high/max share one row with an effort slider.`
+        : opts.effortMode === 'submenu'
+          ? `each model's low/medium/high share one row with an effort submenu.`
+          : `effort levels are listed separately.`;
+    p.log.info(`Favorites mode active — ${result.routes.length} entries; ${effortNote}`);
     p.log.info('Edit with `relay-ai favorites`.');
   }
   if (result.droppedFavorites.length > 0) {
@@ -362,11 +364,12 @@ async function runAntigravityCommand(
     childArgs?: string[];
     versionGuard?: boolean;
     pauseForCapacityWarning?: boolean;
-    /** agy only: Relay-only entries (no native slots) with low/medium/high folded into a slider. */
-    agyEffortSlider?: boolean;
+    /** How this surface exposes effort levels (default 'rows'). 'slider'/'submenu' drop native slots. */
+    effortMode?: AntigravityEffortMode;
   } = {},
 ): Promise<number> {
   const prefs = loadPreferences();
+  const effortMode = opts.effortMode ?? 'rows';
 
   relayIntro(intro);
 
@@ -392,7 +395,7 @@ async function runAntigravityCommand(
     maxRoutes: routeLimit,
     pauseForCapacityWarning: opts.pauseForCapacityWarning ?? false,
     childArgs: opts.childArgs ?? [],
-    agyEffortSlider: opts.agyEffortSlider ?? false,
+    effortMode,
   });
   if (!routeResult) return 1;
 
@@ -406,7 +409,8 @@ async function runAntigravityCommand(
 
   let gatewayHandle: CloudCodeGatewayHandle;
   try {
-    gatewayHandle = await startCloudCodeGateway(routeResult.routes, { trace, logFn, nativeSlots: !opts.agyEffortSlider });
+    // Only the IDE ('rows') borrows native Google slots; agy/app list every route as a Relay-only entry.
+    gatewayHandle = await startCloudCodeGateway(routeResult.routes, { trace, logFn, nativeSlots: effortMode === 'rows' });
   } catch (err) {
     p.log.error(`Failed to start Cloud Code gateway: ${err}`);
     return 1;
@@ -434,7 +438,7 @@ export async function runAgyCommand(
   return runAntigravityCommand(
     'relay-ai agy — Antigravity CLI', 'agy', trace, boot,
     (env, routes) => launchAntigravityCli(env, buildAgyLaunchArgs(agyLaunchModelLabel(routes), childArgs)),
-    { childArgs, versionGuard: true, pauseForCapacityWarning: true, agyEffortSlider: true },
+    { childArgs, versionGuard: true, pauseForCapacityWarning: true, effortMode: 'slider' },
   );
 }
 
@@ -488,7 +492,7 @@ export async function runAntigravityAppCommand(
       }
       return 0;
     },
-    { childArgs, versionGuard: false, pauseForCapacityWarning: false },
+    { childArgs, versionGuard: false, pauseForCapacityWarning: false, effortMode: 'submenu' },
   );
 }
 

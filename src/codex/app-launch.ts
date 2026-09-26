@@ -192,12 +192,16 @@ export function findCodexApp(platform: NodeJS.Platform = process.platform): stri
 }
 
 /** Exact embedded Codex runtime used by ChatGPT Desktop. */
-export function findEmbeddedCodexBinary(platform: NodeJS.Platform = process.platform): string | null {
-  const appPath = findCodexApp(platform);
+export function findEmbeddedCodexBinary(
+  platform: NodeJS.Platform = process.platform,
+  appPath: string | null = findCodexApp(platform),
+): string | null {
   if (platform === 'darwin') {
     if (!appPath) return null;
-    const binary = join(appPath, 'Contents', 'Resources', 'codex');
-    return existsSync(binary) ? binary : null;
+    return [
+      join(appPath, 'Contents', 'Resources', 'codex-cli', 'bin', 'codex'),
+      join(appPath, 'Contents', 'Resources', 'codex'),
+    ].find(binary => existsSync(binary)) ?? null;
   }
   if (platform === 'linux') {
     if (!appPath) return null;

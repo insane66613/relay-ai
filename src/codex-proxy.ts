@@ -101,14 +101,22 @@ function isExternalToolCallItem(item: unknown): boolean {
   return typeof type === 'string' && EXTERNAL_TOOL_CALL_TYPES.has(type);
 }
 
+function isExternalHistoryItem(item: ResponsesInputItem): boolean {
+  return isExternalToolCallItem(item)
+    || ('role' in item && item.role === 'assistant')
+    || item.type === 'reasoning'
+    || item.type === 'compaction'
+    || item.type === 'context_compaction';
+}
+
 /**
  * A Codex continuation is a *delta*: tool outputs for the previous turn's calls,
  * and nothing else — except when the user types while a tool is running, which
  * appends their message to the same batch. Requiring every item to be a tool
  * output treated that batch as full history, skipped state reconstruction, and
  * forwarded an orphaned tool result with no matching call (live upstream 400).
- * Full-history replays are identified by the assistant tool-call items they
- * replay, so a batch without those is always a delta.
+ * This helper only recognizes tool-result deltas. User-message deltas and
+ * full-history replays are distinguished by resolveExternalContinuation.
  */
 export function isExternalToolContinuation(input: unknown): input is ResponsesInputItem[] {
   return Array.isArray(input)
@@ -1132,13 +1140,15 @@ export async function startCodexProxy(
         const previousResponseId = typeof body.previous_response_id === 'string'
           ? body.previous_response_id
           : undefined;
-        if (!previousResponseId || !isExternalToolContinuation(body.input)) return { body };
+        if (!previousResponseId) return { body };
+        const input = responsesInputItems(body.input);
+        if (input.length === 0 || input.some(isExternalHistoryItem)) return { body };
         const previous = externalResponseStates.get(previousResponseId);
         if (!previous) return { body, orphanedResponseId: previousResponseId };
         return {
           body: {
             ...body,
-            input: [...previous.input, ...previous.output, ...body.input],
+            input: [...previous.input, ...previous.output, ...input],
           },
           consumedResponseId: previousResponseId,
         };
@@ -1531,7 +1541,8 @@ export async function startCodexProxy(
               if (currentExternalConsumedResponseId) {
                 externalResponseStates.delete(currentExternalConsumedResponseId);
               }
-              rememberExternalResponse(currentExternalCompletedResponse, currentExternalStateInput);
+              // The compaction output replaces the prior transcript for later deltas.
+              rememberExternalResponse(currentExternalCompletedResponse, v2Compaction ? [] : currentExternalStateInput);
             }
             audit({
               transport: 'ws', requestedModel: modelId, dispatch: relayDispatch, phase: 'complete',

@@ -2,7 +2,7 @@
 import {
   addManualModel,
   removeManualModel
-} from "./chunk-PEWKU2CS.js";
+} from "./chunk-NZYRIU7L.js";
 import {
   CODEX_APP_AUTO_COMPACT_RATIO,
   CODEX_APP_PROVIDER_ID,
@@ -146,7 +146,7 @@ import {
   waitForCodexAppQuit,
   writeSecureLogLine,
   zenRegistryStub
-} from "./chunk-HZMOLLUI.js";
+} from "./chunk-IGGQQDV7.js";
 import {
   filterTemplates,
   getTemplateById,
@@ -226,7 +226,7 @@ import {
   thinkingProviderOptions,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-JA5VDGAQ.js";
+} from "./chunk-G6CR3AKM.js";
 import "./chunk-JIDIH7DS.js";
 
 // src/cli.ts
@@ -4193,11 +4193,6 @@ function captureCompletedResponse(sseText) {
   return void 0;
 }
 var MAX_EXTERNAL_RESPONSE_STATES = 8;
-var EXTERNAL_TOOL_OUTPUT_TYPES = /* @__PURE__ */ new Set([
-  "function_call_output",
-  "custom_tool_call_output",
-  "tool_search_output"
-]);
 var EXTERNAL_TOOL_CALL_TYPES = /* @__PURE__ */ new Set([
   "function_call",
   "custom_tool_call",
@@ -4210,18 +4205,13 @@ function responsesInputItems(input) {
   }
   return [];
 }
-function isExternalToolOutputItem(item) {
-  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-  const type = item.type;
-  return typeof type === "string" && EXTERNAL_TOOL_OUTPUT_TYPES.has(type);
-}
 function isExternalToolCallItem(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) return false;
   const type = item.type;
   return typeof type === "string" && EXTERNAL_TOOL_CALL_TYPES.has(type);
 }
-function isExternalToolContinuation(input) {
-  return Array.isArray(input) && input.length > 0 && input.some(isExternalToolOutputItem) && !input.some(isExternalToolCallItem);
+function isExternalHistoryItem(item) {
+  return isExternalToolCallItem(item) || "role" in item && item.role === "assistant" || item.type === "reasoning" || item.type === "compaction" || item.type === "context_compaction";
 }
 var IMAGE_PART_CHAR_WEIGHT = 4e3;
 function isImageContentPart(part) {
@@ -5043,13 +5033,15 @@ Sec-WebSocket-Accept: ${wsAcceptKey(clientKey)}\r
       };
       const resolveExternalContinuation = (body) => {
         const previousResponseId = typeof body.previous_response_id === "string" ? body.previous_response_id : void 0;
-        if (!previousResponseId || !isExternalToolContinuation(body.input)) return { body };
+        if (!previousResponseId) return { body };
+        const input = responsesInputItems(body.input);
+        if (input.length === 0 || input.some(isExternalHistoryItem)) return { body };
         const previous = externalResponseStates.get(previousResponseId);
         if (!previous) return { body, orphanedResponseId: previousResponseId };
         return {
           body: {
             ...body,
-            input: [...previous.input, ...previous.output, ...body.input]
+            input: [...previous.input, ...previous.output, ...input]
           },
           consumedResponseId: previousResponseId
         };
@@ -5462,7 +5454,7 @@ data: ${JSON.stringify({ error: { message: `Unknown model: ${modelId}` } })}
                 if (currentExternalConsumedResponseId) {
                   externalResponseStates.delete(currentExternalConsumedResponseId);
                 }
-                rememberExternalResponse(currentExternalCompletedResponse, currentExternalStateInput);
+                rememberExternalResponse(currentExternalCompletedResponse, v2Compaction ? [] : currentExternalStateInput);
               }
               audit({
                 transport: "ws",
@@ -10678,7 +10670,7 @@ async function resolveAntigravityLaunchRoutes(opts) {
     (entry) => !meetsContextFloor("antigravity", entry.model.contextWindow)
   );
   const launchable = resolved.filter((entry) => !tooSmall.includes(entry));
-  const routes = buildAntigravityRoutes(launchable, maxRoutes, { effortSlider: opts.effortSlider });
+  const routes = buildAntigravityRoutes(launchable, maxRoutes, { effortMode: opts.effortMode });
   const routed = new Set(routes.map((route) => `${route.providerId}:${route.modelId}`));
   const cutByVariants = launchable.filter((entry) => !routed.has(`${entry.providerId}:${entry.model.id}`)).map((entry) => ({ providerId: entry.providerId, modelId: entry.model.id }));
   return {
@@ -11289,16 +11281,15 @@ async function resolveAndBuildRoutes(provider, model, allProviders, prefs, opts)
     allProviders,
     favorites: prefs.favoriteModels ?? [],
     maxRoutes: opts.maxRoutes,
-    effortSlider: opts.agyEffortSlider
+    effortMode: opts.effortMode
   });
   if (!result) {
     p12.log.error(`No credential for ${provider.name}. Run: relay-ai providers auth ${provider.id} or add an API key.`);
     return null;
   }
   if (result.routes.length > 1) {
-    p12.log.info(
-      opts.agyEffortSlider ? `Favorites mode active \u2014 ${result.routes.length} entries; each model's low/medium/high/max share one row with an effort slider.` : `Favorites mode active \u2014 Antigravity picker will show ${result.routes.length} entries (effort levels are listed separately).`
-    );
+    const effortNote = opts.effortMode === "slider" ? `each model's low/medium/high/max share one row with an effort slider.` : opts.effortMode === "submenu" ? `each model's low/medium/high share one row with an effort submenu.` : `effort levels are listed separately.`;
+    p12.log.info(`Favorites mode active \u2014 ${result.routes.length} entries; ${effortNote}`);
     p12.log.info("Edit with `relay-ai favorites`.");
   }
   if (result.droppedFavorites.length > 0) {
@@ -11367,6 +11358,7 @@ function waitForShutdown(input = process.stdin, platform = process.platform) {
 }
 async function runAntigravityCommand(intro, tracePrefix, trace, boot, launch, opts = {}) {
   const prefs = loadPreferences();
+  const effortMode = opts.effortMode ?? "rows";
   relayIntro(intro);
   const selection = await resolveAntigravityLaunch(prefs, boot);
   if (!selection) return 1;
@@ -11385,7 +11377,7 @@ async function runAntigravityCommand(intro, tracePrefix, trace, boot, launch, op
     maxRoutes: routeLimit,
     pauseForCapacityWarning: opts.pauseForCapacityWarning ?? false,
     childArgs: opts.childArgs ?? [],
-    agyEffortSlider: opts.agyEffortSlider ?? false
+    effortMode
   });
   if (!routeResult) return 1;
   savePreferences({
@@ -11396,7 +11388,7 @@ async function runAntigravityCommand(intro, tracePrefix, trace, boot, launch, op
   const logFn = traceLogPath ? makeTraceLogger(traceLogPath) : void 0;
   let gatewayHandle;
   try {
-    gatewayHandle = await startCloudCodeGateway(routeResult.routes, { trace, logFn, nativeSlots: !opts.agyEffortSlider });
+    gatewayHandle = await startCloudCodeGateway(routeResult.routes, { trace, logFn, nativeSlots: effortMode === "rows" });
   } catch (err) {
     p12.log.error(`Failed to start Cloud Code gateway: ${err}`);
     return 1;
@@ -11419,7 +11411,7 @@ async function runAgyCommand(childArgs, trace = false, boot) {
     trace,
     boot,
     (env, routes) => launchAntigravityCli(env, buildAgyLaunchArgs(agyLaunchModelLabel(routes), childArgs)),
-    { childArgs, versionGuard: true, pauseForCapacityWarning: true, agyEffortSlider: true }
+    { childArgs, versionGuard: true, pauseForCapacityWarning: true, effortMode: "slider" }
   );
 }
 async function runAntigravityAppCommand(childArgs, trace = false, boot) {
@@ -11468,7 +11460,7 @@ async function runAntigravityAppCommand(childArgs, trace = false, boot) {
       }
       return 0;
     },
-    { childArgs, versionGuard: false, pauseForCapacityWarning: false }
+    { childArgs, versionGuard: false, pauseForCapacityWarning: false, effortMode: "submenu" }
   );
 }
 async function runAntigravityIdeCommand(childArgs, trace = false, boot) {
@@ -16395,7 +16387,7 @@ Options:
   --trace    Write debug logs under ~/.relay-ai/logs/`);
       return 0;
     }
-    const { runUiCommand } = await import("./ui-command-RSHRODMS.js");
+    const { runUiCommand } = await import("./ui-command-AVBR5ALW.js");
     return runUiCommand({ trace: parsed.trace, serverMode: parsed.uiServerMode });
   }
   if (parsed.command === "models") {

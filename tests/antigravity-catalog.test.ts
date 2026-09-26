@@ -700,7 +700,7 @@ describe('antigravity effort variants', () => {
       fav('openai-oauth', gpt('gpt-6-sol', 'GPT-6 Sol')),
       fav('zai', { ...gpt('glm-5', 'GLM 5'), npm: '@ai-sdk/openai-compatible', reasoningEffortLevels: ['low', 'medium', 'high'] }),
       fav('groq', { id: 'llama-3.1-8b', name: 'Llama 8B' }),
-    ] as any[], undefined, { effortSlider: true });
+    ] as any[], undefined, { effortMode: 'slider' });
 
     // agy names the slider row after its first entry, so that one carries no level.
     expect(routes.map(route => [route.displayName, route.reasoningEffort])).toEqual([
@@ -713,6 +713,22 @@ describe('antigravity effort variants', () => {
       ['GLM 5 Medium (Relay - zai)', 'medium'],
       ['GLM 5 High (Relay - zai)', 'high'],
       ['Llama 8B (Relay - groq)', undefined],
+    ]);
+  });
+
+  // The app folds labels ending "(Low)"/"(Medium)"/"(High)" into one submenu row; xhigh/max stay separate.
+  it('submenu (app): low/medium/high named for the fold, xhigh/max as their own rows', () => {
+    const routes = buildAntigravityRoutes([
+      fav('groq', { id: 'llama-3.1-8b', name: 'Llama 8B' }),
+      fav('openai-oauth', gpt('gpt-6-sol', 'GPT-6 Sol')),
+    ] as any[], undefined, { effortMode: 'submenu' });
+    expect(routes.map(route => [route.displayName, route.reasoningEffort])).toEqual([
+      ['Llama 8B (Relay - groq)', undefined],
+      ['GPT-6 Sol (Relay - openai-oauth) (Low)', 'low'],
+      ['GPT-6 Sol (Relay - openai-oauth) (Medium)', 'medium'],
+      ['GPT-6 Sol (Relay - openai-oauth) (High)', 'high'],
+      ['GPT-6 Sol XHigh (Relay - openai-oauth)', 'xhigh'],
+      ['GPT-6 Sol Max (Relay - openai-oauth)', 'max'],
     ]);
   });
 

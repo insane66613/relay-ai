@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.2] - 2026-09-26
+
+### Changed
+
+- **The Antigravity app folds effort into a submenu.** Each model with adjustable effort is now one row with a Low / Medium / High submenu on hover — matching how Antigravity shows Google's own models — with XHigh and Max as separate rows where supported. Previously the app listed every effort level as its own row. Antigravity IDE keeps one row per level, because its submenu is hidden once the model list is long enough to scroll. The agy CLI's effort slider is unchanged.
+
+### Fixed
+
+- **Mixed ChatGPT desktop mode starts again after the macOS app update.** ChatGPT moved its embedded Codex CLI from `Contents/Resources/codex` to `Contents/Resources/codex-cli/bin/codex`. Relay now finds the new packaged launcher and still supports older app installs. The Windows and Linux packages checked with this update retain their existing runtime paths.
+- **Codex app follow-up turns retain their conversation history on Relay routes.** When Codex sends only a new user message with `previous_response_id`, Relay now restores the earlier input and reply from the active WebSocket session before forwarding it. Full-history replays stay intact, and missing response state returns a clear error instead of silently starting without context. Compaction responses become the starting summary for later turns. ([Issue #78](https://github.com/jacob-bd/relay-ai/issues/78))
+
 ## [0.15.1] - 2026-09-25
 
 ### Fixed

@@ -764,7 +764,149 @@ describe('startCodexProxy', () => {
     }
   });
 
-  it('rejects an orphaned external tool continuation before contacting the provider', async () => {
+  it('reconstructs successive user turns from previous_response_id', async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    const provider = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      req.once('end', () => {
+        requestBodies.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
+        const turn = requestBodies.length;
+        if (turn === 6) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            id: 'chatcmpl-6', object: 'chat.completion',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'summary-6' }, finish_reason: 'stop' }],
+          }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({
+          id: `chatcmpl-${turn}`, object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: { role: 'assistant', content: `reply-${turn}` }, finish_reason: null }],
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          id: `chatcmpl-${turn}`, object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        })}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    const providerPort = await new Promise<number>(resolve => provider.listen(0, '127.0.0.1', () => resolve((provider.address() as { port: number }).port)));
+    const capability = 'U'.repeat(43);
+    handle = await startCodexProxy([{
+      modelId: 'relay-model', npm: '@ai-sdk/openai-compatible', apiKey: 'test-key',
+      baseURL: `http://127.0.0.1:${providerPort}/v1`, upstreamModelId: 'relay-model',
+      providerId: 'relay-provider',
+    }], { requireAuth: false, mixedNative: { nativeModelIds: new Set(['gpt-5.5']), capability } });
+
+    try {
+      let lastResponseId = '';
+      await new Promise<void>((resolve, reject) => {
+        const client = new WebSocket(`ws://127.0.0.1:${handle!.port}/_relay-codex/${capability}/v1/responses`);
+        const timer = setTimeout(() => { client.close(); reject(new Error('timed out waiting for user turns')); }, 5_000);
+        let completed = 0;
+        client.on('open', () => client.send(JSON.stringify({ model: 'relay-model', input: 'alpha' })));
+        client.on('message', data => {
+          const event = JSON.parse(data.toString()) as { type?: string; response?: { id?: string } };
+          if (event.type !== 'response.completed') return;
+          completed++;
+          lastResponseId = event.response?.id ?? '';
+          if (completed < 3) {
+            client.send(JSON.stringify({
+              model: 'relay-model', previous_response_id: event.response?.id,
+              input: [{ type: 'message', role: 'user', content: completed === 1 ? 'beta' : 'gamma' }],
+            }));
+          } else if (completed === 3) {
+            client.send(JSON.stringify({
+              model: 'relay-model', previous_response_id: event.response?.id,
+              input: [
+                { type: 'message', role: 'user', content: 'alpha' },
+                { type: 'message', role: 'assistant', content: 'reply-1' },
+                { type: 'message', role: 'user', content: 'beta' },
+                { type: 'message', role: 'assistant', content: 'reply-2' },
+                { type: 'message', role: 'user', content: 'gamma' },
+                { type: 'message', role: 'assistant', content: 'reply-3' },
+                { type: 'message', role: 'user', content: 'delta' },
+              ],
+            }));
+          } else if (completed === 4) {
+            client.send(JSON.stringify({ model: 'relay-model', previous_response_id: event.response?.id, input: 'epsilon' }));
+          } else if (completed === 5) {
+            client.send(JSON.stringify({
+              model: 'relay-model', previous_response_id: event.response?.id,
+              input: [{ type: 'compaction_trigger' }],
+            }));
+          } else if (completed === 6) {
+            client.send(JSON.stringify({
+              model: 'relay-model', previous_response_id: event.response?.id,
+              input: [{ type: 'message', role: 'user', content: 'zeta' }],
+            }));
+          } else client.close();
+        });
+        client.on('close', code => {
+          clearTimeout(timer);
+          if (code !== 1000 || completed !== 7) reject(new Error(`user turns failed: code=${code} completed=${completed}`));
+          else resolve();
+        });
+        client.on('error', reject);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const client = new WebSocket(`ws://127.0.0.1:${handle!.port}/_relay-codex/${capability}/v1/responses`);
+        const timer = setTimeout(() => { client.close(); reject(new Error('timed out waiting for reconnect rejection')); }, 3_000);
+        let failed = false;
+        client.on('open', () => client.send(JSON.stringify({
+          model: 'relay-model', previous_response_id: lastResponseId,
+          input: [{ type: 'message', role: 'user', content: 'after reconnect' }],
+        })));
+        client.on('message', data => {
+          const event = JSON.parse(data.toString()) as { type?: string; response?: { error?: { message?: string } } };
+          if (event.type === 'response.failed') {
+            failed = event.response?.error?.message === 'Unknown or expired previous_response_id';
+            client.close();
+          }
+        });
+        client.on('close', code => {
+          clearTimeout(timer);
+          if (code !== 1000 || !failed) reject(new Error(`reconnect did not reject missing history: code=${code} failed=${failed}`));
+          else resolve();
+        });
+        client.on('error', reject);
+      });
+
+      const textByTurn = requestBodies.map(body => (body.messages as Array<{ content: unknown }>).map(message =>
+        typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+      ).join(' '));
+      expect(textByTurn[1]).toContain('alpha');
+      expect(textByTurn[1]).toContain('reply-1');
+      expect(textByTurn[1]).toContain('beta');
+      expect(textByTurn[2]).toContain('alpha');
+      expect(textByTurn[2]).toContain('reply-1');
+      expect(textByTurn[2]).toContain('beta');
+      expect(textByTurn[2]).toContain('reply-2');
+      expect(textByTurn[2]).toContain('gamma');
+      expect(textByTurn[2]!.match(/alpha/g)).toHaveLength(1);
+      expect(textByTurn[2]!.match(/beta/g)).toHaveLength(1);
+      expect(textByTurn[3]!.match(/alpha/g)).toHaveLength(1);
+      expect(textByTurn[3]!.match(/reply-1/g)).toHaveLength(1);
+      expect(textByTurn[4]!.match(/alpha/g)).toHaveLength(1);
+      expect(textByTurn[4]!.match(/delta/g)).toHaveLength(1);
+      expect(textByTurn[4]).toContain('reply-4');
+      expect(textByTurn[4]).toContain('epsilon');
+      expect(textByTurn[5]).toContain('alpha');
+      expect(textByTurn[5]).toContain('epsilon');
+      expect(textByTurn[6]).toContain('summary-6');
+      expect(textByTurn[6]).toContain('zeta');
+      expect(textByTurn[6]).not.toContain('alpha');
+      expect(textByTurn[6]).not.toContain('reply-1');
+      expect(requestBodies).toHaveLength(7);
+    } finally {
+      await new Promise<void>(resolve => provider.close(() => resolve()));
+    }
+  });
+
+  it('rejects orphaned external continuations before contacting the provider', async () => {
     let providerCalls = 0;
     const provider = createServer((req, res) => {
       providerCalls += 1;
@@ -793,29 +935,32 @@ describe('startCodexProxy', () => {
     });
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const client = new WebSocket(`ws://127.0.0.1:${handle!.port}/_relay-codex/${capability}/v1/responses`);
-        const timer = setTimeout(() => { client.close(); reject(new Error('timed out waiting for orphan rejection')); }, 3_000);
-        client.on('open', () => client.send(JSON.stringify({
-          model: 'relay-model',
-          stream: true,
-          previous_response_id: 'resp-expired',
-          input: [{ type: 'function_call_output', call_id: 'call_expired', output: 'orphan' }],
-        })));
-        client.on('message', data => {
-          const event = JSON.parse(data.toString()) as { type?: string };
-          if (event.type === 'response.completed' || event.type === 'response.failed') client.close();
+      for (const input of [
+        [{ type: 'function_call_output', call_id: 'call_expired', output: 'orphan' }],
+        [{ type: 'message', role: 'user', content: 'new user turn' }],
+      ]) {
+        await new Promise<void>((resolve, reject) => {
+          const client = new WebSocket(`ws://127.0.0.1:${handle!.port}/_relay-codex/${capability}/v1/responses`);
+          const timer = setTimeout(() => { client.close(); reject(new Error('timed out waiting for orphan rejection')); }, 3_000);
+          let failed = false;
+          client.on('open', () => client.send(JSON.stringify({
+            model: 'relay-model', stream: true, previous_response_id: 'resp-expired', input,
+          })));
+          client.on('message', data => {
+            const event = JSON.parse(data.toString()) as { type?: string; response?: { error?: { message?: string } } };
+            if (event.type === 'response.failed') {
+              failed = event.response?.error?.message === 'Unknown or expired previous_response_id';
+              client.close();
+            }
+          });
+          client.on('close', code => {
+            clearTimeout(timer);
+            if (code !== 1000 || !failed) reject(new Error(`orphan continuation did not fail: code=${code} failed=${failed}`));
+            else resolve();
+          });
+          client.on('error', reject);
         });
-        client.on('close', code => {
-          clearTimeout(timer);
-          if (code !== 1000) {
-            reject(new Error(`orphan continuation closed unexpectedly: code=${code}`));
-            return;
-          }
-          resolve();
-        });
-        client.on('error', reject);
-      });
+      }
       expect(providerCalls).toBe(0);
     } finally {
       await new Promise<void>(resolve => provider.close(() => resolve()));

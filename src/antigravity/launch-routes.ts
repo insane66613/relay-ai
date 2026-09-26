@@ -3,7 +3,7 @@ import { resolveLocalProviderApiKey } from '../provider-catalog.js';
 import { providerRefreshToken } from '../provider-runtime.js';
 import { buildFavoritesList, type ResolveContext } from '../favorites-resolver.js';
 import type { FavoriteModel, LocalProvider, LocalProviderModel } from '../types.js';
-import { buildAntigravityRoutes } from './catalog.js';
+import { buildAntigravityRoutes, type AntigravityEffortMode } from './catalog.js';
 import { meetsContextFloor } from '../target-compatibility.js';
 import type { AntigravityRoute } from './types.js';
 
@@ -13,8 +13,8 @@ export interface ResolveAntigravityLaunchRoutesOptions {
   allProviders: LocalProvider[];
   favorites?: FavoriteModel[];
   maxRoutes?: number;
-  /** agy: list the levels it folds into one row with a slider (low/medium/high/max), plus XHigh. */
-  effortSlider?: boolean;
+  /** How the surface exposes effort levels: agy slider, app submenu, or IDE plain rows (default). */
+  effortMode?: AntigravityEffortMode;
 }
 
 export interface ResolveAntigravityLaunchRoutesResult {
@@ -67,7 +67,7 @@ export async function resolveAntigravityLaunchRoutes(
   const launchable = resolved.filter(entry => !tooSmall.includes(entry));
 
   // Effort variants can push later favorites past the cap; report those too.
-  const routes = buildAntigravityRoutes(launchable, maxRoutes, { effortSlider: opts.effortSlider });
+  const routes = buildAntigravityRoutes(launchable, maxRoutes, { effortMode: opts.effortMode });
   const routed = new Set(routes.map(route => `${route.providerId}:${route.modelId}`));
   const cutByVariants = launchable
     .filter(entry => !routed.has(`${entry.providerId}:${entry.model.id}`))

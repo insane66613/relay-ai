@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   codexAppInstallHint,
   codexAppSupported,
+  findEmbeddedCodexBinary,
   darwinQuitAppleScript,
   darwinMainExecutableCandidates,
   darwinMainPidsFromProcessList,
@@ -53,6 +56,25 @@ describe('Linux ChatGPT desktop launcher', () => {
 });
 
 describe('ChatGPT desktop restart safety', () => {
+  it('finds the current macOS packaged Codex CLI and keeps the older layout compatible', () => {
+    const appPath = mkdtempSync(join(tmpdir(), 'relay-ai-chatgpt-'));
+    const oldBinary = join(appPath, 'Contents', 'Resources', 'codex');
+    const newBinary = join(appPath, 'Contents', 'Resources', 'codex-cli', 'bin', 'codex');
+    try {
+      mkdirSync(join(appPath, 'Contents', 'Resources', 'codex-cli', 'bin'), { recursive: true });
+      writeFileSync(newBinary, '');
+      expect(findEmbeddedCodexBinary('darwin', appPath)).toBe(newBinary);
+
+      writeFileSync(oldBinary, '');
+      expect(findEmbeddedCodexBinary('darwin', appPath)).toBe(newBinary);
+
+      rmSync(newBinary);
+      expect(findEmbeddedCodexBinary('darwin', appPath)).toBe(oldBinary);
+    } finally {
+      rmSync(appPath, { recursive: true, force: true });
+    }
+  });
+
   it('identifies the main macOS executable by full path, not the truncated process name', () => {
     expect(darwinMainExecutableCandidates('/Applications/ChatGPT.app')).toEqual([
       '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT',

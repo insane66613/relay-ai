@@ -99,7 +99,7 @@ import {
   translateRequest,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-JA5VDGAQ.js";
+} from "./chunk-G6CR3AKM.js";
 
 // src/registry/google-model-id.ts
 var GOOGLE_MODEL_PREFIX = "models/";
@@ -4560,6 +4560,7 @@ function injectRelayModels(fixture, routes, templateKey, opts = {}) {
   return result;
 }
 function buildAntigravityRoutes(resolvedFavorites, maxRoutes = MAX_MODEL_CATALOG, opts = {}) {
+  const effortMode = opts.effortMode ?? "rows";
   const routes = [];
   const seen = /* @__PURE__ */ new Set();
   for (const fav of resolvedFavorites) {
@@ -4594,9 +4595,15 @@ function buildAntigravityRoutes(resolvedFavorites, maxRoutes = MAX_MODEL_CATALOG
       contextWindow: contextWindow2
     });
     const route = routes.pop();
-    routes.push(...effortVariants(route, favModel, routes.length === 0, opts.effortSlider ?? false));
+    routes.push(...effortVariants(route, favModel, routes.length === 0, effortMode));
   }
-  return applyUniqueAntigravityRouteLabels(routes.slice(0, maxRoutes));
+  const labeled = applyUniqueAntigravityRouteLabels(routes.slice(0, maxRoutes));
+  if (effortMode !== "submenu") return labeled;
+  return labeled.map((route) => {
+    if (!route.reasoningEffort || !["low", "medium", "high"].includes(route.reasoningEffort)) return route;
+    const label = effortLabel(route.reasoningEffort);
+    return { ...route, displayName: `${route.displayName.replace(` ${label} (Relay`, " (Relay")} (${label})` };
+  });
 }
 function favoriteEffortLevels(levels, defaultLevel) {
   let start = levels.indexOf("medium");
@@ -4611,7 +4618,7 @@ function effortLabel(level) {
 }
 var AGY_SLIDER_LEVELS = ["low", "medium", "high", "max"];
 var AGY_EXTRA_LEVELS = ["xhigh"];
-function effortVariants(route, model, isLaunchModel, effortSlider) {
+function effortVariants(route, model, isLaunchModel, effortMode) {
   if (route.modelFormat === "cloud-code") return [route];
   const m = model;
   const metadata = {
@@ -4631,10 +4638,11 @@ function effortVariants(route, model, isLaunchModel, effortSlider) {
     return index < 0 ? EFFORT_RANK.length : index;
   };
   const ordered = [...caps.levels].sort((a, b) => rank(a) - rank(b));
-  const levels = effortSlider ? ordered.filter((level) => AGY_SLIDER_LEVELS.includes(level) || AGY_EXTRA_LEVELS.includes(level)) : isLaunchModel ? ordered : favoriteEffortLevels(ordered, caps.defaultLevel);
+  const folded = effortMode === "slider" || effortMode === "submenu";
+  const levels = folded ? ordered.filter((level) => AGY_SLIDER_LEVELS.includes(level) || AGY_EXTRA_LEVELS.includes(level)) : isLaunchModel ? ordered : favoriteEffortLevels(ordered, caps.defaultLevel);
   if (levels.length < 2) return [route];
   const baseName = routeBaseModelName(route);
-  const sliderRowLevel = effortSlider ? levels.find((level) => AGY_SLIDER_LEVELS.includes(level)) : void 0;
+  const sliderRowLevel = effortMode === "slider" ? levels.find((level) => AGY_SLIDER_LEVELS.includes(level)) : void 0;
   return levels.map((level) => ({
     ...route,
     catalogId: `${route.catalogId}__effort_${level}`,
@@ -8849,12 +8857,13 @@ function findCodexApp(platform = process.platform) {
   }
   return null;
 }
-function findEmbeddedCodexBinary(platform = process.platform) {
-  const appPath = findCodexApp(platform);
+function findEmbeddedCodexBinary(platform = process.platform, appPath = findCodexApp(platform)) {
   if (platform === "darwin") {
     if (!appPath) return null;
-    const binary = join7(appPath, "Contents", "Resources", "codex");
-    return existsSync6(binary) ? binary : null;
+    return [
+      join7(appPath, "Contents", "Resources", "codex-cli", "bin", "codex"),
+      join7(appPath, "Contents", "Resources", "codex")
+    ].find((binary) => existsSync6(binary)) ?? null;
   }
   if (platform === "linux") {
     if (!appPath) return null;
@@ -9569,4 +9578,4 @@ export {
   supportsClaudeTransparentMode,
   buildHttpProxyRoutes
 };
-//# sourceMappingURL=chunk-HZMOLLUI.js.map
+//# sourceMappingURL=chunk-IGGQQDV7.js.map
