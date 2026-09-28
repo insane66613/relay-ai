@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.3] - 2026-09-28
+
+### Added
+
+- **Relay Core can diagnose Antigravity implicit-cache misses.** Opt-in `onDebug` output now includes section and contents-prefix fingerprints, request and retry correlation, endpoint timings, raw token counts that distinguish missing cache usage from zero, and completed/failed/cancelled response outcomes. Prompts, tool schemas, credentials, project/account identifiers and response text stay out of diagnostics. Logging is off by default, and Antigravity session/request-ID behavior is unchanged. These diagnostics help investigate cache misses; they do not guarantee or force Google cache hits. ([Issue #79](https://github.com/jacob-bd/relay-ai/issues/79))
+- **A custom fetch hook for embedded Antigravity callers.** `createRelayModel(routeId, { fetchImpl })` can use a host-supplied transport for every Cloud Code inference attempt, including endpoint failover and OAuth-refresh retries, without changing global fetch. The hook receives authenticated requests and full bodies, so it must be trusted. See [the Core integration guide](docs/CORE.md#antigravity-cache-diagnostics-and-custom-transport).
+
 ## [0.15.2] - 2026-09-26
 
 ### Changed

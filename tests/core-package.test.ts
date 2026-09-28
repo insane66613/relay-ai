@@ -56,6 +56,7 @@ describe.skipIf(!built)('dist/core package surface', () => {
     expect(dts).toMatch(/reasoning\?:\s*RelayReasoningLevel/);
     expect(dts).toMatch(/onDebug\?:/);
     expect(dts).toMatch(/sessionId\?:\s*string/);
+    expect(dts).toMatch(/fetchImpl\?:\s*typeof globalThis.fetch/);
     // The documented round-trip — read a level off a descriptor, pass it to
     // createRelayModel — must typecheck, so these cannot be bare `string`.
     expect(dts).toMatch(/reasoningLevels\?:\s*RelayReasoningLevel\[\]/);

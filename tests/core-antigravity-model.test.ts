@@ -587,6 +587,18 @@ describe('createRelayModel Cloud Code Assist routes', () => {
       code: 'PROVIDER_DISABLED',
     });
   });
+
+  it('uses the public custom fetch hook for Cloud Code requests and retries', async () => {
+    seedAntigravity();
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ error: { message: 'expired' } }, 401))
+      .mockResolvedValueOnce(streamResponse([sseChunk(geminiTextPayload('custom transport'))]));
+    const model = await createRelayModel(`antigravity::${UPSTREAM_MODEL}`, { fetchImpl: customFetch });
+    expect(await streamText({ model, prompt: 'hello', maxRetries: 0 }).text).toBe('custom transport');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(customFetch).toHaveBeenCalledTimes(2);
+    expect(headerValue(customFetch.mock.calls[1]!, 'Authorization')).toBe(`Bearer ${REFRESHED_ACCESS}`);
+  });
 });
 
 describe('Cloud Code ordered endpoint failover', () => {

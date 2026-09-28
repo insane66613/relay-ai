@@ -74,6 +74,7 @@ type RelayReasoningLevel =
 interface CreateRelayModelOptions {
   sessionId?: string;
   onDebug?: (message: string) => void;
+  fetchImpl?: typeof globalThis.fetch;
   reasoning?: RelayReasoningLevel;
 }
 ```
@@ -139,8 +140,78 @@ An optional hook for one-line transport diagnostics. Messages carry **event type
 Scope, accurately:
 
 - **Generic SDK-provider routes** — forwarded to relay-ai's provider factory; the Responses-Lite WebSocket transport is the main producer of messages today (connection, per-frame summaries, terminal events, close codes).
-- **Cloud Code Assist routes** — forwarded to the native Cloud Code transport (per-endpoint request/response, endpoint failover, credential refresh, retry outcome).
+- **Cloud Code Assist routes** — forwarded to the native Cloud Code transport (request fingerprints, per-endpoint request/response, timings, endpoint failover, credential refresh, raw usage and response-body outcome).
 - Ordinary HTTP provider calls do not currently emit diagnostics of their own, so a plain API-key route may produce no messages at all. Treat `onDebug` as best-effort observability, not as a guaranteed event stream.
+
+### Antigravity cache diagnostics and custom transport
+
+For an embedded host such as Alef, enable diagnostics when constructing its Cloud Code model:
+
+```ts
+const model = await createRelayModel('antigravity::gemini-3.7-flash-high', {
+  onDebug: line => diagnosticsLogger.info(line),
+  fetchImpl: (input, init) => fetch(input, init), // optional; substitute your transport for A/B tests
+});
+```
+
+`fetchImpl` is supported on Antigravity Cloud Code routes; other routes ignore it.
+It receives the **final Cloud Code envelope and authenticated headers**, and serves
+every inference attempt, including endpoint failover and a retry after OAuth refresh.
+OAuth token refresh itself uses Relay's existing machinery. A custom transport must
+preserve the request signal and return a standard `Response`. A host can bind an
+Undici dispatcher inside this function without changing global fetch. This hook is
+trusted code: unlike the sanitized debug hook, it sees bearer tokens, project metadata,
+prompts, tool schemas and full response bodies. Do not log these from your custom fetch.
+
+Cloud Code debug lines start with `cloud-code: call=<local UUID> attempt=<number>`.
+The diagnostic UUID is separate from the upstream request ID and is never sent to
+Google. Each call has its own ID; attempt numbers increase across endpoint failover
+and credential-refresh retries. `fingerprint` is emitted at attempt 0, before sending.
+AI SDK retries that invoke the model again create separate call IDs.
+
+- `fingerprint` includes 128-bit truncated SHA-256 hashes and UTF-8 byte lengths of
+  `systemInstruction`, `tools`, `toolConfig` and `generationConfig`. Absent sections
+  have `present: false`. It also records the number of function declarations, the
+  contents count and the inner request's top-level JSON key order; unknown keys are
+  replaced with `[other]` to avoid exposing caller-defined data.
+- Each `contents[i]` has a byte length and a cumulative `prefixHash`. The hash covers
+  all content entries through index `i`, in order, with byte-length framing. Compare
+  successive hashes across calls: matching entries through index `k` identify a shared
+  contents prefix through `k`. Compare system/tools hashes separately. Hashes use the
+  serialized request sections without sorting keys, so order changes are visible.
+- `timing` records `sendMs` (call start to attempt start) and `headersMs` (attempt
+  start to fetch returning headers). `end` records `firstBodyByteMs` and `elapsedMs`,
+  both measured from call start using a monotonic clock. Body timings reflect when
+  Relay observes bytes as they are consumed, not socket-level arrival or server compute
+  time. HTTP version and socket reuse are reported as `unavailable` because standard
+  fetch does not expose them; a custom transport can instrument its own connection.
+- The final `end` event carries raw `promptTokenCount`, `cachedContentTokenCount` and
+  `thoughtsTokenCount` as `{ present: true, value: number }` or `{ present: false }`.
+  It distinguishes an absent cache field from an explicit zero, before SDK normalization.
+  `usageMetadataPresent` indicates whether any usage metadata was observed. The latest
+  observed usage object is used; unexpected nonnumeric values are marked invalid and
+  never echoed. A missing usage object on a cancelled/failed stream is inconclusive.
+- Outcomes are `completed` (response-body EOF), `failed` (body read error) or `cancelled`
+  (abort signal or consumer cancellation). EOF does not by itself certify a successful
+  model completion; check HTTP status and SDK results too. Failures before response
+  headers produce an `end` event with `phase: "fetch"`. Retryable attempts log their
+  status or network error before failover; only the final selected body is observed.
+
+Diagnostics are off unless `onDebug` is provided. They never print prompt text, tool
+schemas, credential values, project/account IDs, response text or cancellation reasons.
+Hashing and response inspection run only when enabled. Response bytes and cancellation
+still flow to the SDK; no cloned stream is drained in the background. A throwing debug
+callback is ignored so logging cannot fail a model call. Hashes are comparison aids,
+not encryption; treat collected logs as diagnostic data.
+
+For cache-friendly calls, keep the large shared system instruction and tool definitions
+stable and preserve their ordering; append conversation history and put changing context
+late in the prompt. Google's public guidance recommends large common prefixes and
+similar requests close together ([Gemini caching documentation](https://ai.google.dev/gemini-api/docs/caching)).
+That guidance concerns the public Gemini API; Cloud Code's internal cache-affinity rules
+are undocumented, and a matching fingerprint does not guarantee a cache hit.
+`sessionId` remains an OpenCode Go option. Relay makes no Antigravity session-ID or
+request-ID behavior change based on this investigation.
 
 ## `RelayModelDescriptor` fields
 

@@ -32,6 +32,13 @@ interface CreateRelayModelOptions {
      */
     onDebug?: (message: string) => void;
     /**
+     * Custom upstream fetch for Antigravity Cloud Code routes (other routes ignore it).
+     * Used for every inference attempt, including failover and OAuth retries.
+     * Trusted transport: receives OAuth credentials, project metadata and full bodies.
+     * Credential refresh itself still uses Relay's OAuth machinery.
+     */
+    fetchImpl?: typeof globalThis.fetch;
+    /**
      * Reasoning level to apply to every call made with the returned model.
      *
      * Throws `UNSUPPORTED_REASONING_LEVEL` when the route cannot express the

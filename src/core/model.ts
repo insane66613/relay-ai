@@ -153,6 +153,7 @@ export async function createRelayModel(routeId: RelayRouteId, options?: CreateRe
         projectId,
         refreshToken: providerRefreshToken(provider.id, provider.authType, provider.authRef),
         ...(options?.onDebug ? { onDebug: options.onDebug } : {}),
+        ...(options?.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       }), reasoningNpmForRoute(provider, model));
     } catch (err) {
       if (isRelayCoreError(err)) throw err;

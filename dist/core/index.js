@@ -50,7 +50,7 @@ import { join as join2 } from "path";
 // package.json
 var package_default = {
   name: "@jacobbd/relay-ai",
-  version: "0.15.2",
+  version: "0.15.3",
   publishConfig: {
     access: "public"
   },
@@ -1099,15 +1099,15 @@ function resolveProtocolAlternative(input) {
 function errorText(value) {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object") return "";
-  const record = value;
-  const pieces = [record.message, record.responseBody, record.code].filter((item) => typeof item === "string");
+  const record2 = value;
+  const pieces = [record2.message, record2.responseBody, record2.code].filter((item) => typeof item === "string");
   return pieces.join(" ");
 }
 function findErrorField(error, field, depth = 0) {
   if (!error || typeof error !== "object" || depth > 3) return void 0;
-  const record = error;
-  if (record[field] !== void 0) return record[field];
-  return findErrorField(record.cause, field, depth + 1) ?? findErrorField(record.lastError, field, depth + 1);
+  const record2 = error;
+  if (record2[field] !== void 0) return record2[field];
+  return findErrorField(record2.cause, field, depth + 1) ?? findErrorField(record2.lastError, field, depth + 1);
 }
 function classifyProtocolFailure(error) {
   const statusValue = findErrorField(error, "statusCode") ?? findErrorField(error, "status");
@@ -4615,6 +4615,137 @@ function reconcileCachedModelProtocol(model, provider, metadata = loadModelsDevC
 
 // src/core/antigravity-model.ts
 import { randomUUID as randomUUID3 } from "crypto";
+
+// src/core/antigravity-diagnostics.ts
+import { createHash as createHash3 } from "crypto";
+var SECTION_NAMES = ["systemInstruction", "tools", "toolConfig", "generationConfig"];
+var USAGE_NAMES = ["promptTokenCount", "cachedContentTokenCount", "thoughtsTokenCount"];
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function requestFingerprint(value) {
+  const body = record(value);
+  const sections = Object.fromEntries(SECTION_NAMES.map((name) => {
+    const text = JSON.stringify(body[name]);
+    return [name, text === void 0 ? { present: false } : {
+      present: true,
+      bytes: Buffer.byteLength(text),
+      hash: createHash3("sha256").update(text).digest("hex").slice(0, 32)
+    }];
+  }));
+  const prefix = createHash3("sha256");
+  const contents = (Array.isArray(body.contents) ? body.contents : []).map((item) => {
+    const text = JSON.stringify(item);
+    const bytes = Buffer.byteLength(text);
+    prefix.update(`${bytes}:`).update(text);
+    return { bytes, prefixHash: prefix.copy().digest("hex").slice(0, 32) };
+  });
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return {
+    // Unknown property names can contain caller data. Keep their position but hide their names.
+    keyOrder: Object.keys(body).map((key) => [...SECTION_NAMES, "contents", "safetySettings", "cachedContent", "labels"].includes(key) ? key : "[other]"),
+    sections,
+    contents,
+    contentsCount: contents.length,
+    toolCount: tools.reduce((count, tool) => {
+      const declarations = record(tool).functionDeclarations;
+      return count + (Array.isArray(declarations) ? declarations.length : 0);
+    }, 0)
+  };
+}
+function observeCloudCodeBody(body, streaming, log, startedAt, signal) {
+  const decoder = new TextDecoder();
+  let pending = "";
+  let usage;
+  let firstBodyByteMs = null;
+  let finished = false;
+  const inspect = (text) => {
+    try {
+      const parsed = record(JSON.parse(text));
+      const response = "response" in parsed ? record(parsed.response) : parsed;
+      if (response.usageMetadata && typeof response.usageMetadata === "object") {
+        usage = record(response.usageMetadata);
+      }
+    } catch {
+    }
+  };
+  const inspectEvent = (event) => {
+    const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+    if (data) inspect(data);
+  };
+  const scan = (chunk) => {
+    pending += chunk ? decoder.decode(chunk, { stream: true }) : decoder.decode();
+    if (!streaming) {
+      if (!chunk) inspect(pending);
+      return;
+    }
+    while (true) {
+      const separator = /\r?\n\r?\n/.exec(pending);
+      if (!separator) break;
+      inspectEvent(pending.slice(0, separator.index));
+      pending = pending.slice(separator.index + separator[0].length);
+    }
+    if (!chunk && pending) inspectEvent(pending);
+  };
+  const finish = (outcome) => {
+    if (finished) return;
+    finished = true;
+    signal?.removeEventListener("abort", onAbort);
+    log(`end ${JSON.stringify({
+      outcome,
+      elapsedMs: performance.now() - startedAt,
+      firstBodyByteMs,
+      usageMetadataPresent: usage !== void 0,
+      usage: Object.fromEntries(USAGE_NAMES.map((name) => {
+        if (!usage || !Object.hasOwn(usage, name)) return [name, { present: false }];
+        const value = usage[name];
+        return [name, typeof value === "number" && Number.isFinite(value) ? { present: true, value } : { present: true, valid: false }];
+      }))
+    })}`);
+    pending = "";
+  };
+  const onAbort = () => finish("cancelled");
+  if (!body) {
+    finish("completed");
+    return null;
+  }
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  const reader = body.getReader();
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          if (!finished) scan();
+          finish("completed");
+          reader.releaseLock();
+          controller.close();
+        } else {
+          if (!finished) {
+            firstBodyByteMs ??= performance.now() - startedAt;
+            scan(value);
+          }
+          controller.enqueue(value);
+        }
+      } catch (err) {
+        finish(signal?.aborted ? "cancelled" : "failed");
+        reader.releaseLock();
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      finish("cancelled");
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
+    }
+  }, { highWaterMark: 0 });
+}
+
+// src/core/antigravity-model.ts
 var CLOUD_CODE_BASES = ANTIGRAVITY_BASE_URLS.map((base) => base.replace(/\/+$/, ""));
 var CLOUD_CODE_BASE = CLOUD_CODE_BASES[0];
 var STREAM_URLS = CLOUD_CODE_BASES.map((base) => `${base}/${ANTIGRAVITY_API_VERSION}:streamGenerateContent?alt=sse`);
@@ -4688,17 +4819,21 @@ function createCloudCodeSseUnwrapper() {
 }
 function createCloudCodeFetch(options, fetchImpl) {
   let accessToken = options.accessToken;
-  const debug = (msg) => {
-    try {
-      options.onDebug?.(`cloud-code: ${msg}`);
-    } catch {
-    }
-  };
   return async (input, init) => {
+    const startedAt = options.onDebug ? performance.now() : 0;
+    const diagnosticId = options.onDebug ? randomUUID3() : "";
+    let attempt = 0;
+    const debug = (msg) => {
+      try {
+        options.onDebug?.(`cloud-code: call=${diagnosticId} attempt=${attempt} ${msg}`);
+      } catch {
+      }
+    };
     const url = requestUrl(input);
     const streaming = url.includes("streamGenerateContent");
     const signal = init?.signal ?? (input instanceof Request ? input.signal : void 0);
     const geminiBody = await readJsonBody(input, init);
+    if (options.onDebug) debug(`fingerprint ${JSON.stringify(requestFingerprint(geminiBody))}`);
     const envelope = {
       project: options.projectId,
       requestId: randomUUID3(),
@@ -4711,7 +4846,7 @@ function createCloudCodeFetch(options, fetchImpl) {
     const body = JSON.stringify(envelope);
     const bodyByteLength = Buffer.byteLength(body, "utf8");
     const upstreamUrls = streaming ? STREAM_URLS : UNARY_URLS;
-    const doFetch = fetchImpl ?? ((input2, init2) => globalThis.fetch(input2, init2));
+    const doFetch = fetchImpl ?? options.fetchImpl ?? ((input2, init2) => globalThis.fetch(input2, init2));
     const send = async (url2, token) => {
       try {
         return await doFetch(url2, {
@@ -4732,6 +4867,8 @@ function createCloudCodeFetch(options, fetchImpl) {
     const sendWithFailover = async (token, startIndex = 0) => {
       let lastError;
       for (let i = startIndex; i < upstreamUrls.length; i += 1) {
+        attempt += 1;
+        const attemptStartedAt = options.onDebug ? performance.now() : 0;
         const url2 = upstreamUrls[i];
         const isLast = i === upstreamUrls.length - 1;
         const where = `endpoint=${i + 1}/${upstreamUrls.length} host=${endpointHost(url2)}`;
@@ -4739,8 +4876,12 @@ function createCloudCodeFetch(options, fetchImpl) {
         try {
           debug(`request ${where} kind=${streaming ? "stream" : "unary"} payloadBytes=${bodyByteLength}`);
           response2 = await send(url2, token);
+          if (options.onDebug) debug(`timing ${where} headersMs=${performance.now() - attemptStartedAt} sendMs=${attemptStartedAt - startedAt} httpVersion=unavailable socketReused=unavailable`);
         } catch (err) {
-          if (isAbortError(err, signal)) throw err;
+          if (isAbortError(err, signal)) {
+            debug('end {"outcome":"cancelled","phase":"fetch"}');
+            throw err;
+          }
           lastError = err;
           debug(`network failure ${where} errorName=${errorName(err)}`);
         }
@@ -4753,8 +4894,12 @@ function createCloudCodeFetch(options, fetchImpl) {
           lastError = new Error(`Cloud Code Assist endpoint returned ${response2.status}`);
           debug(`retryable status=${response2.status} ${where} \u2014 trying next endpoint`);
         }
-        if (signal?.aborted) throw abortError(signal);
+        if (signal?.aborted) {
+          debug('end {"outcome":"cancelled","phase":"fetch"}');
+          throw abortError(signal);
+        }
       }
+      debug('end {"outcome":"failed","phase":"fetch"}');
       throw lastError ?? new Error("All Cloud Code Assist endpoints failed");
     };
     const tokenUsed = accessToken;
@@ -4770,6 +4915,10 @@ function createCloudCodeFetch(options, fetchImpl) {
       } else {
         debug(`refresh did not yield a new credential (refreshed=${refreshed ? "same" : "none"})`);
       }
+    }
+    if (options.onDebug) {
+      const observed = observeCloudCodeBody(response.body, streaming && response.ok, debug, startedAt, signal);
+      response = new Response(observed, { status: response.status, statusText: response.statusText, headers: response.headers });
     }
     return adaptUpstreamResponse(response, streaming);
   };
@@ -5076,7 +5225,8 @@ async function createRelayModel(routeId, options) {
         accessToken: apiKey2,
         projectId,
         refreshToken: providerRefreshToken(provider.id, provider.authType, provider.authRef),
-        ...options?.onDebug ? { onDebug: options.onDebug } : {}
+        ...options?.onDebug ? { onDebug: options.onDebug } : {},
+        ...options?.fetchImpl ? { fetchImpl: options.fetchImpl } : {}
       }), reasoningNpmForRoute(provider, model));
     } catch (err) {
       if (isRelayCoreError(err)) throw err;

@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { LanguageModel } from 'ai';
+import { observeCloudCodeBody, requestFingerprint } from './antigravity-diagnostics.js';
 import {
   ANTIGRAVITY_API_VERSION,
   ANTIGRAVITY_BASE_URLS,
@@ -18,11 +19,11 @@ export interface AntigravityCloudCodeModelOptions {
   projectId: string;
   refreshToken?: () => Promise<string | null>;
   /**
-   * Sanitized transport diagnostics. Messages carry endpoint host, attempt
-   * number, status, byte counts and error *names* only — never tokens, the
-   * project id, prompts, tool arguments, or any response body.
+   * Opt-in transport diagnostics: correlation, section hashes, timings and raw
+   * token counts. Never credentials, project ids, prompts, tools or response text.
    */
   onDebug?: (message: string) => void;
+  fetchImpl?: typeof globalThis.fetch;
 }
 
 const CLOUD_CODE_BASES = ANTIGRAVITY_BASE_URLS.map(base => base.replace(/\/+$/, ''));
@@ -116,13 +117,18 @@ export function createCloudCodeFetch(
   fetchImpl?: typeof globalThis.fetch,
 ): typeof globalThis.fetch {
   let accessToken = options.accessToken;
-  const debug = (msg: string) => { try { options.onDebug?.(`cloud-code: ${msg}`); } catch { /* ignore */ } };
-
   return async (input, init) => {
+    const startedAt = options.onDebug ? performance.now() : 0;
+    const diagnosticId = options.onDebug ? randomUUID() : '';
+    let attempt = 0;
+    const debug = (msg: string) => {
+      try { options.onDebug?.(`cloud-code: call=${diagnosticId} attempt=${attempt} ${msg}`); } catch { /* ignore */ }
+    };
     const url = requestUrl(input);
     const streaming = url.includes('streamGenerateContent');
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const geminiBody = await readJsonBody(input, init);
+    if (options.onDebug) debug(`fingerprint ${JSON.stringify(requestFingerprint(geminiBody))}`);
     const envelope = {
       project: options.projectId,
       requestId: randomUUID(),
@@ -137,7 +143,7 @@ export function createCloudCodeFetch(
     // under-report. The diagnostic claims bytes, so measure bytes.
     const bodyByteLength = Buffer.byteLength(body, 'utf8');
     const upstreamUrls = streaming ? STREAM_URLS : UNARY_URLS;
-    const doFetch = fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
+    const doFetch = fetchImpl ?? options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
 
     const send = async (url: string, token: string): Promise<Response> => {
       try {
@@ -166,6 +172,8 @@ export function createCloudCodeFetch(
     const sendWithFailover = async (token: string, startIndex = 0): Promise<{ response: Response; url: string; index: number }> => {
       let lastError: unknown;
       for (let i = startIndex; i < upstreamUrls.length; i += 1) {
+        attempt += 1;
+        const attemptStartedAt = options.onDebug ? performance.now() : 0;
         const url = upstreamUrls[i]!;
         const isLast = i === upstreamUrls.length - 1;
         const where = `endpoint=${i + 1}/${upstreamUrls.length} host=${endpointHost(url)}`;
@@ -173,8 +181,12 @@ export function createCloudCodeFetch(
         try {
           debug(`request ${where} kind=${streaming ? 'stream' : 'unary'} payloadBytes=${bodyByteLength}`);
           response = await send(url, token);
+          if (options.onDebug) debug(`timing ${where} headersMs=${performance.now() - attemptStartedAt} sendMs=${attemptStartedAt - startedAt} httpVersion=unavailable socketReused=unavailable`);
         } catch (err) {
-          if (isAbortError(err, signal)) throw err;
+          if (isAbortError(err, signal)) {
+            debug('end {"outcome":"cancelled","phase":"fetch"}');
+            throw err;
+          }
           lastError = err;
           debug(`network failure ${where} errorName=${errorName(err)}`);
         }
@@ -188,8 +200,12 @@ export function createCloudCodeFetch(
           debug(`retryable status=${response.status} ${where} — trying next endpoint`);
         }
         // Only reached when another endpoint is still to be tried.
-        if (signal?.aborted) throw abortError(signal);
+        if (signal?.aborted) {
+          debug('end {"outcome":"cancelled","phase":"fetch"}');
+          throw abortError(signal);
+        }
       }
+      debug('end {"outcome":"failed","phase":"fetch"}');
       throw lastError ?? new Error('All Cloud Code Assist endpoints failed');
     };
 
@@ -216,6 +232,10 @@ export function createCloudCodeFetch(
       }
     }
 
+    if (options.onDebug) {
+      const observed = observeCloudCodeBody(response.body, streaming && response.ok, debug, startedAt, signal);
+      response = new Response(observed, { status: response.status, statusText: response.statusText, headers: response.headers });
+    }
     return adaptUpstreamResponse(response, streaming);
   };
 }
