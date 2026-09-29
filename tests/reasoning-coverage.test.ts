@@ -76,6 +76,11 @@ const EXCLUDED_MODELS: ModelExclusion[] = [
     match: /^zai-glm/,
     reason: "GLM hosted on Mistral declares low..max while Mistral's own wire is none/high — needs live verification",
   },
+  {
+    provider: 'kilo',
+    match: /glm-5\.2/,
+    reason: 'GLM-5.2 mapping documents high/xhigh only — the declared none has no verified wire value',
+  },
 ];
 
 function isExcluded(providerId: string, modelId: string): boolean {

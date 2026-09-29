@@ -49,6 +49,15 @@ const COVERAGE_NPM: Record<string, string> = {
   anthropic: '@ai-sdk/anthropic',
   nvidia: '@ai-sdk/openai-compatible',
   venice: '@ai-sdk/openai-compatible',
+  'claude-code': '@ai-sdk/anthropic',
+  moonshot: '@ai-sdk/openai-compatible',
+  'moonshot-global': '@ai-sdk/openai-compatible',
+  'kimi-code': '@ai-sdk/openai-compatible',
+  zhipu: '@ai-sdk/openai-compatible',
+  'cline-pass': '@ai-sdk/openai-compatible',
+  kilo: '@ai-sdk/openai-compatible',
+  cloudflare: '@ai-sdk/openai-compatible',
+  'github-copilot': '@ai-sdk/openai-compatible',
 };
 
 /** Zen/Go serve Claude through the Anthropic package, everything else generically. */

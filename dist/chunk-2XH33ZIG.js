@@ -112,7 +112,7 @@ import {
   translateRequest,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-GCX2LYNR.js";
+} from "./chunk-P32ZJPLM.js";
 
 // src/registry/google-model-id.ts
 var GOOGLE_MODEL_PREFIX = "models/";
@@ -9022,4 +9022,4 @@ export {
   supportsClaudeTransparentMode,
   buildHttpProxyRoutes
 };
-//# sourceMappingURL=chunk-5XKBXWDW.js.map
+//# sourceMappingURL=chunk-2XH33ZIG.js.map

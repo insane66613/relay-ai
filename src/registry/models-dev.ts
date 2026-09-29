@@ -66,6 +66,7 @@ let memoryCacheMtime = 0;
 export const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
   zen: 'opencode',
   go: 'opencode-go',
+  'claude-code': 'anthropic',
   google: 'google',
   openai: 'openai',
   'openai-oauth': 'openai',
@@ -85,6 +86,18 @@ export const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
   anthropic: 'anthropic',
   nvidia: 'nvidia',
   venice: 'openrouter',
+  // Provider ids whose models.dev bucket carries a different name. Mapped by
+  // API host, not by name: moonshot is api.moonshot.cn (the cn bucket),
+  // moonshot-global is api.moonshot.ai, and the kimi-code template points at
+  // api.kimi.com — the bucket the .ai/.com split labels 'cn'.
+  moonshot: 'moonshotai-cn',
+  'moonshot-global': 'moonshotai',
+  'kimi-code': 'kimi-code-plan-cn',
+  zhipu: 'zhipuai',
+  'cline-pass': 'cline-pass',
+  kilo: 'kilo',
+  cloudflare: 'cloudflare-workers-ai',
+  'github-copilot': 'github-copilot',
 };
 
 export function readModelsDevCacheMeta(
