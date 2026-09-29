@@ -48,6 +48,7 @@ var package_default = {
     dev: "tsup --watch",
     test: 'vitest run --exclude "tests/debug-*.test.ts"',
     "test:reasoning": "vitest run tests/reasoning-coverage.test.ts",
+    "test:live:reasoning": "vitest run tests/debug-reasoning-live.test.ts",
     "test:live": "vitest run tests/debug-xai.test.ts tests/debug-openai-oauth.test.ts",
     "test:watch": "vitest",
     typecheck: "tsc --noEmit",
@@ -2829,21 +2830,32 @@ function readEnvCredential(varName) {
   if (!raw?.trim()) return null;
   return raw.trim().split(/\r?\n/)[0]?.trim() || null;
 }
+var osKeyringReadCache = /* @__PURE__ */ new Map();
+function invalidateKeyringReadCache(account) {
+  if (account === void 0) osKeyringReadCache.clear();
+  else osKeyringReadCache.delete(account);
+}
 async function readOsKeyringAccount(account, diag) {
-  try {
-    const { Entry } = await import("@napi-rs/keyring");
-    const value = new Entry(KEYRING_SERVICE, account).getPassword() ?? null;
-    if (!value?.startsWith(KEYRING_CHUNK_PREFIX)) return value;
-    const chunkCount = Number(value.slice(KEYRING_CHUNK_PREFIX.length));
-    let combined = "";
-    for (let i = 0; i < chunkCount; i++) {
-      combined += new Entry(KEYRING_SERVICE, `${account}::chunk::${i}`).getPassword() ?? "";
+  const cached2 = osKeyringReadCache.get(account);
+  if (cached2) return cached2;
+  const read = (async () => {
+    try {
+      const { Entry } = await import("@napi-rs/keyring");
+      const value = new Entry(KEYRING_SERVICE, account).getPassword() ?? null;
+      if (!value?.startsWith(KEYRING_CHUNK_PREFIX)) return value;
+      const chunkCount = Number(value.slice(KEYRING_CHUNK_PREFIX.length));
+      let combined = "";
+      for (let i = 0; i < chunkCount; i++) {
+        combined += new Entry(KEYRING_SERVICE, `${account}::chunk::${i}`).getPassword() ?? "";
+      }
+      return combined;
+    } catch (err) {
+      diag?.(classifyKeyringError(err));
+      return null;
     }
-    return combined;
-  } catch (err) {
-    diag?.(classifyKeyringError(err));
-    return null;
-  }
+  })();
+  osKeyringReadCache.set(account, read);
+  return read;
 }
 async function writeOsKeyringAccount(account, key, diag) {
   try {
@@ -2887,20 +2899,30 @@ async function readKeyringAccount(account, diag) {
   return readFileAccount(account);
 }
 async function writeKeyringAccount(account, key, diag) {
-  if (await writeOsKeyringAccount(account, key, diag)) {
-    deleteFileAccount(account);
-    return true;
+  invalidateKeyringReadCache(account);
+  try {
+    if (await writeOsKeyringAccount(account, key, diag)) {
+      deleteFileAccount(account);
+      return true;
+    }
+    if (writeFileAccount(account, key)) {
+      diag?.("OS keyring unavailable \u2014 saved to secrets.json under RELAY_AI_HOME");
+      return true;
+    }
+    return false;
+  } finally {
+    invalidateKeyringReadCache(account);
   }
-  if (writeFileAccount(account, key)) {
-    diag?.("OS keyring unavailable \u2014 saved to secrets.json under RELAY_AI_HOME");
-    return true;
-  }
-  return false;
 }
 async function deleteKeyringAccount(account, diag) {
-  const osOk = await deleteOsKeyringAccount(account, diag);
-  const fileOk = deleteFileAccount(account);
-  return osOk || fileOk;
+  invalidateKeyringReadCache(account);
+  try {
+    const osOk = await deleteOsKeyringAccount(account, diag);
+    const fileOk = deleteFileAccount(account);
+    return osOk || fileOk;
+  } finally {
+    invalidateKeyringReadCache(account);
+  }
 }
 async function readGlobalOpencodeCredential(diag) {
   const fromEnv = resolveApiKey();
@@ -6793,4 +6815,4 @@ export {
   streamAnthropicResponse,
   generateAnthropicResponse
 };
-//# sourceMappingURL=chunk-P32ZJPLM.js.map
+//# sourceMappingURL=chunk-H22LRVBQ.js.map

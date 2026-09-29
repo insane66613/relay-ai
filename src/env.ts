@@ -177,21 +177,47 @@ function readEnvCredential(varName: string): string | null {
   return raw.trim().split(/\r?\n/)[0]?.trim() || null;
 }
 
+/**
+ * Process-scoped memo for OS-keychain reads.
+ *
+ * macOS prompts for keychain access on every read unless the calling binary was
+ * granted "Always Allow" on that item, and one credential resolution reads the
+ * same account up to three times (access token, account id, provider data) —
+ * a multi-provider sweep otherwise turns into dozens of prompts. Only the
+ * keychain lookup is memoized (the secrets.json fallback stays uncached, so
+ * file-based stores keep their exact semantics); every write or delete drops
+ * the entry (at start and completion) so a rotated OAuth token or a freshly
+ * saved key is never served stale, and a read that raced a write cannot leave
+ * its old value cached.
+ */
+const osKeyringReadCache = new Map<string, Promise<string | null>>();
+
+export function invalidateKeyringReadCache(account?: string): void {
+  if (account === undefined) osKeyringReadCache.clear();
+  else osKeyringReadCache.delete(account);
+}
+
 async function readOsKeyringAccount(account: string, diag?: (msg: string) => void): Promise<string | null> {
-  try {
-    const { Entry } = await import('@napi-rs/keyring');
-    const value = new Entry(KEYRING_SERVICE, account).getPassword() ?? null;
-    if (!value?.startsWith(KEYRING_CHUNK_PREFIX)) return value;
-    const chunkCount = Number(value.slice(KEYRING_CHUNK_PREFIX.length));
-    let combined = '';
-    for (let i = 0; i < chunkCount; i++) {
-      combined += new Entry(KEYRING_SERVICE, `${account}::chunk::${i}`).getPassword() ?? '';
+  const cached = osKeyringReadCache.get(account);
+  if (cached) return cached;
+  const read = (async (): Promise<string | null> => {
+    try {
+      const { Entry } = await import('@napi-rs/keyring');
+      const value = new Entry(KEYRING_SERVICE, account).getPassword() ?? null;
+      if (!value?.startsWith(KEYRING_CHUNK_PREFIX)) return value;
+      const chunkCount = Number(value.slice(KEYRING_CHUNK_PREFIX.length));
+      let combined = '';
+      for (let i = 0; i < chunkCount; i++) {
+        combined += new Entry(KEYRING_SERVICE, `${account}::chunk::${i}`).getPassword() ?? '';
+      }
+      return combined;
+    } catch (err) {
+      diag?.(classifyKeyringError(err));
+      return null;
     }
-    return combined;
-  } catch (err) {
-    diag?.(classifyKeyringError(err));
-    return null;
-  }
+  })();
+  osKeyringReadCache.set(account, read);
+  return read;
 }
 
 async function writeOsKeyringAccount(
@@ -249,21 +275,31 @@ async function writeKeyringAccount(
   key: string,
   diag?: (msg: string) => void,
 ): Promise<boolean> {
-  if (await writeOsKeyringAccount(account, key, diag)) {
-    deleteFileAccount(account);
-    return true;
+  invalidateKeyringReadCache(account);
+  try {
+    if (await writeOsKeyringAccount(account, key, diag)) {
+      deleteFileAccount(account);
+      return true;
+    }
+    if (writeFileAccount(account, key)) {
+      diag?.('OS keyring unavailable — saved to secrets.json under RELAY_AI_HOME');
+      return true;
+    }
+    return false;
+  } finally {
+    invalidateKeyringReadCache(account);
   }
-  if (writeFileAccount(account, key)) {
-    diag?.('OS keyring unavailable — saved to secrets.json under RELAY_AI_HOME');
-    return true;
-  }
-  return false;
 }
 
 async function deleteKeyringAccount(account: string, diag?: (msg: string) => void): Promise<boolean> {
-  const osOk = await deleteOsKeyringAccount(account, diag);
-  const fileOk = deleteFileAccount(account);
-  return osOk || fileOk;
+  invalidateKeyringReadCache(account);
+  try {
+    const osOk = await deleteOsKeyringAccount(account, diag);
+    const fileOk = deleteFileAccount(account);
+    return osOk || fileOk;
+  } finally {
+    invalidateKeyringReadCache(account);
+  }
 }
 
 /** Read Zen/Go API key: env → global:opencode → legacy relay-ai → opencode-starter. */
