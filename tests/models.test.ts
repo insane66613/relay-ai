@@ -182,28 +182,27 @@ describe('mergeModels', () => {
 
   it('marks non-Anthropic models correctly from cache', () => {
     const cache = new Map<string, ModelInfo>([
-      ['deepseek-v4-flash-free', {
-        id: 'deepseek-v4-flash-free',
-        name: 'DeepSeek V4 Flash Free',
-        isFree: true,
+      ['deepseek-v4-flash', {
+        id: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        isFree: false,
         brand: 'DeepSeek',
         sourceBackend: 'zen' as const,
         modelFormat: 'openai' as const,
-        cost: { input: 0, output: 0 },
+        cost: { input: 0.14, output: 0.28 },
       }],
     ]);
-    const result = mergeModels(['deepseek-v4-flash-free'], cache, 'zen');
+    const result = mergeModels(['deepseek-v4-flash'], cache, 'zen');
     expect(result[0]).toMatchObject({
-      isFree: true,
+      isFree: false,
       modelFormat: 'openai',
       sourceBackend: 'zen',
     });
   });
 
-  it('filters out stale free models', () => {
-    const result = mergeModels(['qwen3.6-plus-free', 'big-pickle'], null, 'zen');
-    expect(result).toHaveLength(1);
-    expect(result[0]!.id).toBe('big-pickle');
+  it('filters stale and restricted free models', () => {
+    const result = mergeModels(['qwen3.6-plus-free', 'big-pickle', 'grok-4.7'], null, 'zen');
+    expect(result.map(model => model.id)).toEqual(['grok-4.7']);
   });
 
   it('preserves anthropic format for Go models when metadata declares Messages', () => {

@@ -286,3 +286,19 @@ describe('isRoutableModel', () => {
     expect(isRoutableModel(openaiModel, 'openai', 'codex')).toBe(true);
   });
 });
+
+describe('OpenCode Zen free tier', () => {
+  it('hides *-free ids and big-pickle on the zen and go providers', () => {
+    for (const providerId of ['zen', 'go']) {
+      for (const modelId of ['big-pickle', 'space-bunny-free', 'deepseek-v4-flash-free', 'ox-alpha-free']) {
+        expect(shouldHideModel({ providerId, modelId, agent: 'codex-app' }), `${providerId} ${modelId}`).toBe(true);
+      }
+    }
+    expect(hideReason({ providerId: 'zen', modelId: 'big-pickle', agent: 'claude' })).toContain('zen-free-tier');
+  });
+
+  it('keeps paid zen/go models and other-provider free ids visible', () => {
+    expect(shouldHideModel({ providerId: 'zen', modelId: 'grok-4.7', agent: 'codex-app' })).toBe(false);
+    expect(shouldHideModel({ providerId: 'openrouter', modelId: 'vendor/model:free', agent: 'claude' })).toBe(false);
+  });
+});

@@ -163,7 +163,8 @@ export function fixGoogleArraySchemas(value: unknown): unknown {
 
 /**
  * Every route gets NUL pattern escapes rewritten. Union types and array shapes
- * stay intact except on Google, which cannot represent them.
+ * stay intact except on Google, which cannot represent them, and xAI, which
+ * also rejects a root-level union outright (see {@link flattenRootUnionSchema}).
  */
 const RECURSION_SAFE_NPM = new Set(['@ai-sdk/openai', '@ai-sdk/azure']);
 
@@ -212,9 +213,150 @@ export function breakRecursiveSchemaRefs(schema: unknown): unknown {
   return looped ? inlined : schema;
 }
 
+/**
+ * npm package whose API validates tool schemas strictly: xAI refuses the whole
+ * request when a tool's parameter ROOT is not an object type —
+ * `[invalid_client_tool_schema] <tool>: tool parameter root must be an object
+ * type (root schema is an anyOf/oneOf union with a non-object branch)` (HTTP
+ * 400). The Codex/ChatGPT app ships MCP tools declared as root unions
+ * (mcp__codex_app__automation_update and friends), and because tool defs ride
+ * on every request, one such tool 400s every turn — including plain chat.
+ */
+const XAI_NPM = '@ai-sdk/xai';
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Follow local `#/$defs/...` links to a concrete schema. Sibling keywords next
+ * to the `$ref` win over the target (JSON Schema semantics). Returns undefined
+ * for unresolvable or looping chains, and callers fall back safely.
+ */
+function resolveLocalDefRef(
+  value: unknown,
+  defs: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  let current: unknown = value;
+  const seen = new Set<string>();
+  while (isPlainObject(current) && typeof current.$ref === 'string' && current.$ref.startsWith('#/$defs/')) {
+    const name = current.$ref.slice('#/$defs/'.length);
+    const target = defs?.[name];
+    if (!isPlainObject(target) || seen.has(name)) return undefined;
+    seen.add(name);
+    const sibling = { ...current };
+    delete sibling.$ref;
+    current = { ...target, ...sibling };
+  }
+  return isPlainObject(current) ? current : undefined;
+}
+
+/** String values a property schema allows via `const`/`enum` (references resolved). */
+function allowedStringValues(schema: unknown, defs: Record<string, unknown> | undefined): string[] | undefined {
+  const resolved = resolveLocalDefRef(schema, defs);
+  if (!resolved) return undefined;
+  if (Array.isArray(resolved.enum)) {
+    const values = resolved.enum.filter((entry): entry is string => typeof entry === 'string');
+    if (values.length > 0) return values;
+  }
+  if (typeof resolved.const === 'string') return [resolved.const];
+  return undefined;
+}
+
+/**
+ * Combine two definitions of one property. Sibling branches typically differ
+ * only in a `mode`-style discriminator; unioning the allowed values keeps every
+ * branch's choice valid instead of silently locking in the first one.
+ */
+function mergePropertySchemas(
+  first: unknown,
+  second: unknown,
+  defs: Record<string, unknown> | undefined,
+): unknown {
+  const firstValues = allowedStringValues(first, defs);
+  const secondValues = allowedStringValues(second, defs);
+  if (!firstValues || !secondValues) return first;
+  const union = [...new Set([...firstValues, ...secondValues])];
+  const base = { ...(resolveLocalDefRef(first, defs) ?? {}) };
+  delete base.const;
+  return { ...base, enum: union };
+}
+
+/** Merge `source` properties into `target`, unioning conflicting discriminators. */
+function mergeBranchProperties(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  defs: Record<string, unknown> | undefined,
+): void {
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = key in target ? mergePropertySchemas(target[key], value, defs) : value;
+  }
+}
+
+/**
+ * Collect the properties every object branch of a root union declares —
+ * resolving `$ref` branches and recursing through nested unions (a mode branch
+ * can itself be a union of shapes). Returns null when no branch carries an
+ * object shape, so the caller can fall back to a permissive object.
+ */
+function collectUnionBranchProperties(
+  branches: unknown[],
+  defs: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  const properties: Record<string, unknown> = {};
+  let sawObjectBranch = false;
+  for (const branch of branches) {
+    const resolved = resolveLocalDefRef(branch, defs);
+    if (!resolved) continue;
+    const nested = Array.isArray(resolved.oneOf)
+      ? resolved.oneOf
+      : Array.isArray(resolved.anyOf)
+        ? resolved.anyOf
+        : undefined;
+    if (nested) {
+      const inner = collectUnionBranchProperties(nested, defs);
+      if (inner) {
+        mergeBranchProperties(properties, inner, defs);
+        sawObjectBranch = true;
+      }
+      continue;
+    }
+    if (resolved.type !== 'object' && !isPlainObject(resolved.properties)) continue;
+    if (isPlainObject(resolved.properties)) mergeBranchProperties(properties, resolved.properties, defs);
+    sawObjectBranch = true;
+  }
+  return sawObjectBranch ? properties : null;
+}
+
+/**
+ * Rewrite a root-level `oneOf`/`anyOf` into a single object schema — the union
+ * of every object branch's properties, `additionalProperties: true`, and no
+ * `required` (it cannot be right for every branch). `$defs` is kept so the
+ * remaining inner `$ref`s still resolve. A schema whose root carries no union
+ * is returned untouched.
+ */
+export function flattenRootUnionSchema(schema: unknown): unknown {
+  if (!isPlainObject(schema)) return schema;
+  const root = schema;
+  const branches = Array.isArray(root.oneOf)
+    ? root.oneOf
+    : Array.isArray(root.anyOf)
+      ? root.anyOf
+      : undefined;
+  if (!branches) return root;
+  const defs = isPlainObject(root.$defs) ? root.$defs : undefined;
+  const merged: Record<string, unknown> = isPlainObject(root.properties) ? { ...root.properties } : {};
+  mergeBranchProperties(merged, collectUnionBranchProperties(branches, defs) ?? {}, defs);
+  const out: Record<string, unknown> = { type: 'object', properties: merged, additionalProperties: true };
+  if (defs) out.$defs = defs;
+  if (typeof root.description === 'string') out.description = root.description;
+  return out;
+}
+
 export function normalizeToolSchemaForNpm<T>(schema: T, npm: string | undefined): T {
   const acyclic = npm && RECURSION_SAFE_NPM.has(npm) ? schema : breakRecursiveSchemaRefs(schema) as T;
   const portable = rewriteNulPatternEscapes(acyclic) as T;
+  if (npm === XAI_NPM) return flattenRootUnionSchema(portable) as T;
   if (!npm || !GOOGLE_NPM.has(npm)) return portable;
   return fixGoogleArraySchemas(collapseSchemaUnionTypes(portable)) as T;
 }

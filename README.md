@@ -569,7 +569,7 @@ For agent / alef-agent integration (boot flags, NDJSON): **[docs/AI-AGENTS.md](d
 
 When OpenCode Zen is in your registry, `subscriptionFilter` controls which Zen models appear (`free` = free tier only; default = all Zen models). Add or change Zen via `relay-ai providers`.
 
-> **Note on Zen free models:** As of September 2026, OpenCode restricts its zero-cost free-tier models (`*-free`, `big-pickle`) exclusively to the official OpenCode client. Calls from third-party tools or external agents return `403 OpenCode's free tier can only be used from within OpenCode` ([maintainer confirmation](https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322)). Paid OpenCode Zen models and OpenCode Go subscriptions continue to work normally through Relay.
+> **Note on Zen free models:** As of September 2026, OpenCode restricts its zero-cost free-tier models (`*-free`, `big-pickle`) to the official OpenCode client. Calls from third-party tools return `403 OpenCode's free tier can only be used from within OpenCode`, so **Relay hides these ids from every picker and catalog** on both the Zen and Go providers — a `free` subscription filter therefore lists nothing. [Maintainer confirmation](https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322) · [Issue #49580](https://github.com/anomalyco/opencode/issues/49580#issuecomment-5723289721). Paid OpenCode Zen models and OpenCode Go subscriptions are unaffected.
 
 Zen, Go, OpenRouter, and Command Code gateways can expose both Chat
 Completions and Anthropic Messages. Relay uses current model metadata first, so

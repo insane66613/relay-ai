@@ -99,7 +99,7 @@ import {
   translateRequest,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-QPUBSC2V.js";
+} from "./chunk-ZQMMM5BP.js";
 
 // src/registry/google-model-id.ts
 var GOOGLE_MODEL_PREFIX = "models/";
@@ -3313,6 +3313,12 @@ var ANTIGRAVITY_HELPER_SLOT = /^(tab_|chat_|models\/)|image/i;
 function isAntigravityCloudCodeHelperSlot(modelId) {
   return ANTIGRAVITY_HELPER_SLOT.test(modelId);
 }
+var ZEN_FREE_TIER_PROVIDERS = /* @__PURE__ */ new Set(["zen", "go"]);
+function isZenFreeTierModel(providerId, modelId) {
+  if (!ZEN_FREE_TIER_PROVIDERS.has(providerId)) return false;
+  const id = modelId.trim().toLowerCase();
+  return id === "big-pickle" || id.endsWith("-free");
+}
 function matchesAgent(entryAgents, agent) {
   if (!entryAgents || entryAgents.length === 0) return true;
   return entryAgents.includes(agent);
@@ -3332,6 +3338,9 @@ function findBlacklistEntry(ctx) {
 function hideReason(ctx) {
   if (ctx.providerId === "antigravity" && isAntigravityCloudCodeHelperSlot(ctx.modelId)) {
     return "[antigravity-oauth] Cloud Code helper/internal slot";
+  }
+  if (isZenFreeTierModel(ctx.providerId, ctx.modelId)) {
+    return "[zen-free-tier] restricted to the OpenCode client (403 outside)";
   }
   const blacklist = findBlacklistEntry(ctx);
   if (blacklist) return `[blacklist:${blacklist.category}] ${blacklist.reason}`;
@@ -9578,4 +9587,4 @@ export {
   supportsClaudeTransparentMode,
   buildHttpProxyRoutes
 };
-//# sourceMappingURL=chunk-J5ZT7M4R.js.map
+//# sourceMappingURL=chunk-H5M3HLZV.js.map

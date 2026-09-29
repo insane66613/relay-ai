@@ -79,7 +79,7 @@ Model catalog:
       anthropic: anthropic-go__qwen3.7-plus
       openai:    qwen3.7-plus
 
-  OpenCode Zen (paid models; free-tier models are blocked outside OpenCode)
+  OpenCode Zen (paid models; free-tier models are hidden — OpenCode blocks them outside its client)
     MiniMax M3
       anthropic: anthropic-zen__minimax-m3
       openai:    minimax-m3
@@ -252,4 +252,3 @@ docker compose up --build
 **AI assistants:** follow the “For AI assistants” section in **[DOCKER.md](./DOCKER.md)** (questions to ask the user, exact checklist, what not to do).
 
 Full guide: **[DOCKER.md](./DOCKER.md)**.
-

@@ -719,13 +719,18 @@ const GEMINI_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
  */
 const MISTRAL_EFFORT_LEVELS = ['high', 'none'] as const;
 /**
- * xAI's accepted reasoning_effort values differ by transport, per the installed
- * adapter's own docs (`@ai-sdk/xai/docs/01-xai.mdx`): chat models take
- * `low | high`, Responses models take `low | medium | high`. Neither accepts a
- * `none`/`xhigh` value, so neither is offered.
+ * xAI reasoning ladders, per docs.x.ai (model-capabilities/text/reasoning):
+ * grok-4.5 and later take `low | medium | high` (default `high`, reasoning
+ * cannot be disabled) and grok-4.6 and later add `xhigh`. The subset is a
+ * property of the model, not the transport — since AI SDK 7 both `xai(id)` and
+ * `xai.responses(id)` use the Responses API, and the adapter accepts every
+ * value on either call. `none`/`minimal` have no xAI equivalent and are never
+ * sent (the older transport-based `low|high` rule predates the 4.5 ladder).
  */
-const XAI_CHAT_EFFORT_LEVELS = ['low', 'high'] as const;
-const XAI_RESPONSES_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
+const XAI_BASE_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
+const XAI_XHIGH_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
+/** Wire values the xAI adapter accepts; declared levels are filtered to these. */
+const XAI_WIRE_EFFORT_LEVELS = new Set<string>(['low', 'medium', 'high', 'xhigh']);
 const OPENROUTER_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 /**
  * DeepSeek V4 wire values (low/medium map to high; xhigh maps to max).
@@ -825,29 +830,75 @@ function isMistralReasoningModel(modelId: string): boolean {
 }
 
 /**
+ * xAI models that reject `reasoning_effort` even though they reason internally
+ * (per xAI docs — grok-build-0.1 400s on the parameter).
+ */
+function isXaiEffortExcludedModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower.includes('non-reasoning')
+    || lower.startsWith('grok-build')
+    || lower.startsWith('grok-imagine');
+}
+
+/**
  * xAI models that accept `reasoning_effort` on the wire (per xAI docs).
- * models.dev `reasoning: true` is broader — e.g. grok-build-0.1 reasons internally
- * but rejects reasoningEffort (HTTP 400).
+ * Fallback for metadata-less paths only — {@link xaiEffortLadder} prefers
+ * models.dev-declared levels, so a new model needs no edit here.
  */
 function isXaiReasoningEffortModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
-  if (lower.includes('non-reasoning')) return false;
-  if (lower.startsWith('grok-build')) return false;
-  if (lower.startsWith('grok-imagine')) return false;
+  if (isXaiEffortExcludedModel(modelId)) return false;
   if (modelPrefersResponsesApi(modelId)) return true;
   if (lower === 'grok-4.3' || lower.startsWith('grok-4.3-')) return true;
   if (lower === 'grok-4.5' || lower.startsWith('grok-4.5-')) return true;
+  if (lower === 'grok-4.6' || lower.startsWith('grok-4.6-')) return true;
+  if (lower === 'grok-4.7' || lower.startsWith('grok-4.7-')) return true;
   if (lower.includes('-reasoning')) return true;
   return false;
 }
 
+/** Fallback ladder when models.dev declares nothing for an xAI model. */
+function xaiFallbackEffortLevels(modelId: string): readonly string[] {
+  const lower = modelId.toLowerCase();
+  if (lower === 'grok-4.6' || lower.startsWith('grok-4.6-')) return XAI_XHIGH_EFFORT_LEVELS;
+  if (lower === 'grok-4.7' || lower.startsWith('grok-4.7-')) return XAI_XHIGH_EFFORT_LEVELS;
+  // grok-4.20-multi-agent: docs list low/medium/high/xhigh (effort = agent count).
+  if (modelPrefersResponsesApi(modelId)) return XAI_XHIGH_EFFORT_LEVELS;
+  if (lower === 'grok-4.3' || lower.startsWith('grok-4.3-')) return XAI_BASE_EFFORT_LEVELS;
+  if (lower === 'grok-4.5' || lower.startsWith('grok-4.5-')) return XAI_BASE_EFFORT_LEVELS;
+  // grok-4.20-era `-reasoning` ids keep their long-standing pair.
+  if (lower.includes('-reasoning')) return ['low', 'high'];
+  return XAI_BASE_EFFORT_LEVELS;
+}
+
+/**
+ * The effort ladder for an xAI model: models.dev-declared levels filtered to
+ * what the adapter can send, else the fallback rules. `null` = no effort
+ * control (verified rejecters, or nothing declared anywhere).
+ */
+function xaiEffortLadder(
+  modelId: string,
+  metadata?: ReasoningMetadata,
+): { levels: string[]; source: ReasoningSource } | null {
+  if (isXaiEffortExcludedModel(modelId)) return null;
+  const declared = metadata?.reasoningEffortConflict ? undefined : metadata?.reasoningEffortLevels;
+  const declaredLevels = declared?.filter(level => XAI_WIRE_EFFORT_LEVELS.has(level));
+  if (declaredLevels && declaredLevels.length > 0) {
+    return { levels: declaredLevels, source: 'provider-metadata' };
+  }
+  if (isXaiReasoningEffortModel(modelId)) {
+    return { levels: [...xaiFallbackEffortLevels(modelId)], source: 'provider-rule' };
+  }
+  return null;
+}
+
 /**
  * xAI's own default reasoning_effort when the param is omitted (per xAI docs).
- * Varies by model — grok-4.3 defaults to 'low', grok-4.5 defaults to 'high'.
+ * grok-4.5 and later default to 'high'; grok-4.3 defaults to 'low'.
  */
 function xaiDefaultReasoningEffort(modelId: string): string {
   const lower = modelId.toLowerCase();
-  if (lower === 'grok-4.5' || lower.startsWith('grok-4.5-')) return 'high';
+  if (/^grok-4\.(?:5|6|7)(?:-|$)/.test(lower)) return 'high';
   return 'low';
 }
 
@@ -1196,16 +1247,18 @@ function mapCodexEffortToGlm53(effort: string): 'low' | 'medium' | 'high' | 'max
   }
 }
 
-/** `supportsMedium` is true only for the Responses transport — see XAI_*_EFFORT_LEVELS. */
-function mapCodexEffortToXai(effort: string, supportsMedium: boolean): string | undefined {
+/**
+ * xAI wire mapping: the adapter's accepted values are sent verbatim. `max` is
+ * not part of the xAI vocabulary; it keeps its historical `high` mapping
+ * rather than inventing a value the API never documents.
+ */
+function mapCodexEffortToXai(effort: string): string | undefined {
   switch (effort) {
     case 'low':
-      return 'low';
     case 'medium':
-      // Chat has no 'medium'; returning 'low' there would be a silent downgrade.
-      return supportsMedium ? 'medium' : undefined;
     case 'high':
     case 'xhigh':
+      return effort;
     case 'max':
       return 'high';
     default:
@@ -1386,21 +1439,19 @@ function resolveRawReasoningCapabilities(
   }
 
   if (npm === '@ai-sdk/xai') {
-    if (isXaiReasoningEffortModel(modelId)) {
-      const levels = modelPrefersResponsesApi(modelId)
-        ? [...XAI_RESPONSES_EFFORT_LEVELS]
-        : [...XAI_CHAT_EFFORT_LEVELS];
-      return {
-        levels,
-        defaultLevel: xaiDefaultReasoningEffort(modelId),
-        supportsSummaries: true,
-        mode: 'controllable',
-        source: 'provider-rule',
-        confidence: 'documented',
-        wireFormat: { kind: 'openai-reasoning-effort' },
-      };
-    }
-    return EMPTY_REASONING;
+    // Declared-first: models.dev levels (filtered to the wire set) drive the
+    // control, so new models like grok-4.6/4.7 need no allowlist edit here.
+    const ladder = xaiEffortLadder(modelId, metadata);
+    if (!ladder) return EMPTY_REASONING;
+    return {
+      levels: ladder.levels,
+      defaultLevel: xaiDefaultReasoningEffort(modelId),
+      supportsSummaries: true,
+      mode: 'controllable',
+      source: ladder.source,
+      confidence: 'documented',
+      wireFormat: { kind: 'openai-reasoning-effort' },
+    };
   }
 
   if (isDeepSeekReasoningModel(modelId)) {
@@ -1564,8 +1615,8 @@ export function effortProviderOptions(
   }
 
   if (npm === '@ai-sdk/xai') {
-    if (!modelId || !isXaiReasoningEffortModel(modelId)) return undefined;
-    const reasoningEffort = mapCodexEffortToXai(effort, modelPrefersResponsesApi(modelId));
+    if (!modelId || !xaiEffortLadder(modelId, metadata)) return undefined;
+    const reasoningEffort = mapCodexEffortToXai(effort);
     return reasoningEffort ? { xai: { reasoningEffort } } : undefined;
   }
 

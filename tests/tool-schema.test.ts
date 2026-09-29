@@ -3,9 +3,11 @@ import {
   breakRecursiveSchemaRefs,
   collapseSchemaUnionTypes,
   fixGoogleArraySchemas,
+  flattenRootUnionSchema,
   normalizeToolSchemaForNpm,
   rewriteNulPatternEscapes,
 } from '../src/tool-schema.js';
+import XAI_APP_TOOL_SCHEMAS from './fixtures/xai-app-tool-schemas.json';
 
 // ArtifactData's `query.where`, the tuple-array shape that 400s Gemini with
 // `properties[query].properties[where].items.items: missing field` — the inner
@@ -310,5 +312,56 @@ describe('breakRecursiveSchemaRefs', () => {
   it('is applied for non-OpenAI providers but not for OpenAI, which supports recursion', () => {
     expect(JSON.stringify(normalizeToolSchemaForNpm(REQUEST_ENVIRONMENT_INPUT, '@ai-sdk/openai-compatible'))).not.toContain('$ref');
     expect(normalizeToolSchemaForNpm(REQUEST_ENVIRONMENT_INPUT, '@ai-sdk/openai')).toEqual(REQUEST_ENVIRONMENT_INPUT);
+  });
+});
+
+// The Codex app's union-root MCP tools, captured from a live request
+// (mcp__codex_app__automation_update and friends). xAI refused the whole
+// request with `[invalid_client_tool_schema] ... root schema is an anyOf/oneOf
+// union with a non-object branch` until these roots were flattened.
+describe('flattenRootUnionSchema', () => {
+  const toolSchemas = XAI_APP_TOOL_SCHEMAS as Array<{ name: string; parameters: Record<string, unknown> }>;
+  const parametersFor = (name: string): Record<string, unknown> => {
+    const tool = toolSchemas.find(entry => entry.name === name);
+    if (!tool) throw new Error(`missing fixture tool: ${name}`);
+    return tool.parameters;
+  };
+
+  it('rewrites every captured union-root tool into an object schema on xAI routes', () => {
+    for (const tool of toolSchemas) {
+      const out = normalizeToolSchemaForNpm(tool.parameters, '@ai-sdk/xai') as any;
+      expect(out.type, tool.name).toBe('object');
+      expect(out.oneOf, tool.name).toBeUndefined();
+      expect(out.anyOf, tool.name).toBeUndefined();
+      expect(out.additionalProperties, tool.name).toBe(true);
+      expect(typeof out.properties, tool.name).toBe('object');
+    }
+  });
+
+  it('merges $ref branch properties and unions the automation_update mode discriminator', () => {
+    const parameters = parametersFor('automation_update');
+    const out = normalizeToolSchemaForNpm(parameters, '@ai-sdk/xai') as any;
+    expect(out.$defs).toBe(parameters.$defs);
+    for (const key of ['id', 'mode', 'name', 'prompt', 'rrule', 'status', 'kind', 'targetThreadId', 'projectId', 'reasoningEffort', 'executionEnvironment']) {
+      expect(out.properties[key], key).toBeDefined();
+    }
+    expect(out.properties.mode.enum).toEqual(expect.arrayContaining(['view', 'create', 'suggested_create', 'delete']));
+  });
+
+  it('unions conflicting enums on inline branches', () => {
+    const out = normalizeToolSchemaForNpm(
+      parametersFor('complete_conversational_onboarding_task'),
+      '@ai-sdk/xai',
+    ) as any;
+    expect(out.properties.outcome.enum).toEqual(['completed', 'not_completed']);
+    expect(out.properties.url).toBeDefined();
+  });
+
+  it('leaves non-xAI routes and union-free roots untouched', () => {
+    const transfer = parametersFor('transfer_voice_call');
+    expect(normalizeToolSchemaForNpm(transfer, '@ai-sdk/openai')).toBe(transfer);
+    const plain = { type: 'object', properties: { a: { type: 'string' } } };
+    expect(normalizeToolSchemaForNpm(plain, '@ai-sdk/xai')).toBe(plain);
+    expect(flattenRootUnionSchema(plain)).toBe(plain);
   });
 });

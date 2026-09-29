@@ -222,7 +222,7 @@ By default, boot flags use **single-model Relay-only launch** (favorites catalog
 
 ## Zen / Go cloud providers
 
-> **OpenCode Zen free-tier restriction:** OpenCode blocks its zero-cost free models (`*-free`, `big-pickle`) when called outside the official OpenCode client (`403 OpenCode's free tier can only be used from within OpenCode`; confirmed by OpenCode maintainers in [GitHub Issue #49621](https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322)). Use paid Zen models or OpenCode Go for agent workflows.
+> **OpenCode Zen free-tier restriction:** OpenCode blocks its zero-cost free models (`*-free`, `big-pickle`) when called outside the official OpenCode client (`403 OpenCode's free tier can only be used from within OpenCode`; confirmed by OpenCode maintainers in [GitHub Issue #49621](https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322)). Relay hides these ids from every catalog, so agent configs cannot select them — use paid Zen models or OpenCode Go for agent workflows.
 
 For Claude `-p` and Codex `exec` against OpenCode Zen or Go:
 

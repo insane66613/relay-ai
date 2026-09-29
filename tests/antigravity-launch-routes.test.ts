@@ -282,6 +282,13 @@ describe('antigravity launch routes', () => {
         oauthAccountId: 'acct-123',
       },
       {
+        catalogId: 'relay-ai__xai-oauth__grok-4_3__effort_medium',
+        displayName: 'Grok 4.3 Medium (Relay - xAI SuperGrok)',
+        reasoningEffort: 'medium',
+        apiKey: 'oauth-token',
+        authType: 'oauth',
+      },
+      {
         catalogId: 'relay-ai__xai-oauth__grok-4_3__effort_high',
         displayName: 'Grok 4.3 High (Relay - xAI SuperGrok)',
         reasoningEffort: 'high',
@@ -292,6 +299,13 @@ describe('antigravity launch routes', () => {
         catalogId: 'relay-ai__xai__grok-4_3__effort_low',
         displayName: 'Grok 4.3 Low (Relay - xAI API)',
         reasoningEffort: 'low',
+        apiKey: 'api-key',
+        authType: 'api',
+      },
+      {
+        catalogId: 'relay-ai__xai__grok-4_3__effort_medium',
+        displayName: 'Grok 4.3 Medium (Relay - xAI API)',
+        reasoningEffort: 'medium',
         apiKey: 'api-key',
         authType: 'api',
       },

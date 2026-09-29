@@ -1685,8 +1685,9 @@ var ANTHROPIC_EFFORT_LEVELS = ["low", "medium", "high"];
 var OPENAI_EFFORT_LEVELS = ["low", "medium", "high"];
 var GEMINI_EFFORT_LEVELS = ["low", "medium", "high"];
 var MISTRAL_EFFORT_LEVELS = ["high", "none"];
-var XAI_CHAT_EFFORT_LEVELS = ["low", "high"];
-var XAI_RESPONSES_EFFORT_LEVELS = ["low", "medium", "high"];
+var XAI_BASE_EFFORT_LEVELS = ["low", "medium", "high"];
+var XAI_XHIGH_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"];
+var XAI_WIRE_EFFORT_LEVELS = /* @__PURE__ */ new Set(["low", "medium", "high", "xhigh"]);
 var OPENROUTER_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
 var DEEPSEEK_EFFORT_LEVELS = ["high", "max", "none"];
 var DEEPSEEK_NATIVE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "none"];
@@ -1732,20 +1733,46 @@ function isMistralReasoningModel(modelId) {
   const lower = modelId.toLowerCase();
   return lower.startsWith("mistral-") || lower.startsWith("magistral-") || lower.startsWith("ministral-") || lower.includes("reasoning");
 }
+function isXaiEffortExcludedModel(modelId) {
+  const lower = modelId.toLowerCase();
+  return lower.includes("non-reasoning") || lower.startsWith("grok-build") || lower.startsWith("grok-imagine");
+}
 function isXaiReasoningEffortModel(modelId) {
   const lower = modelId.toLowerCase();
-  if (lower.includes("non-reasoning")) return false;
-  if (lower.startsWith("grok-build")) return false;
-  if (lower.startsWith("grok-imagine")) return false;
+  if (isXaiEffortExcludedModel(modelId)) return false;
   if (modelPrefersResponsesApi(modelId)) return true;
   if (lower === "grok-4.3" || lower.startsWith("grok-4.3-")) return true;
   if (lower === "grok-4.5" || lower.startsWith("grok-4.5-")) return true;
+  if (lower === "grok-4.6" || lower.startsWith("grok-4.6-")) return true;
+  if (lower === "grok-4.7" || lower.startsWith("grok-4.7-")) return true;
   if (lower.includes("-reasoning")) return true;
   return false;
 }
+function xaiFallbackEffortLevels(modelId) {
+  const lower = modelId.toLowerCase();
+  if (lower === "grok-4.6" || lower.startsWith("grok-4.6-")) return XAI_XHIGH_EFFORT_LEVELS;
+  if (lower === "grok-4.7" || lower.startsWith("grok-4.7-")) return XAI_XHIGH_EFFORT_LEVELS;
+  if (modelPrefersResponsesApi(modelId)) return XAI_XHIGH_EFFORT_LEVELS;
+  if (lower === "grok-4.3" || lower.startsWith("grok-4.3-")) return XAI_BASE_EFFORT_LEVELS;
+  if (lower === "grok-4.5" || lower.startsWith("grok-4.5-")) return XAI_BASE_EFFORT_LEVELS;
+  if (lower.includes("-reasoning")) return ["low", "high"];
+  return XAI_BASE_EFFORT_LEVELS;
+}
+function xaiEffortLadder(modelId, metadata) {
+  if (isXaiEffortExcludedModel(modelId)) return null;
+  const declared = metadata?.reasoningEffortConflict ? void 0 : metadata?.reasoningEffortLevels;
+  const declaredLevels = declared?.filter((level) => XAI_WIRE_EFFORT_LEVELS.has(level));
+  if (declaredLevels && declaredLevels.length > 0) {
+    return { levels: declaredLevels, source: "provider-metadata" };
+  }
+  if (isXaiReasoningEffortModel(modelId)) {
+    return { levels: [...xaiFallbackEffortLevels(modelId)], source: "provider-rule" };
+  }
+  return null;
+}
 function xaiDefaultReasoningEffort(modelId) {
   const lower = modelId.toLowerCase();
-  if (lower === "grok-4.5" || lower.startsWith("grok-4.5-")) return "high";
+  if (/^grok-4\.(?:5|6|7)(?:-|$)/.test(lower)) return "high";
   return "low";
 }
 var DEEPSEEK_V4_REASONING_ID = /^(?:[a-z0-9-]+\/)?deepseek-v4(?:\.\d+)?-(?:flash|pro)(?:-|$)/;
@@ -1943,14 +1970,13 @@ function mapCodexEffortToGlm53(effort) {
       return void 0;
   }
 }
-function mapCodexEffortToXai(effort, supportsMedium) {
+function mapCodexEffortToXai(effort) {
   switch (effort) {
     case "low":
-      return "low";
     case "medium":
-      return supportsMedium ? "medium" : void 0;
     case "high":
     case "xhigh":
+      return effort;
     case "max":
       return "high";
     default:
@@ -2077,19 +2103,17 @@ function resolveRawReasoningCapabilities(npm, modelId, metadata) {
     return EMPTY_REASONING;
   }
   if (npm === "@ai-sdk/xai") {
-    if (isXaiReasoningEffortModel(modelId)) {
-      const levels = modelPrefersResponsesApi(modelId) ? [...XAI_RESPONSES_EFFORT_LEVELS] : [...XAI_CHAT_EFFORT_LEVELS];
-      return {
-        levels,
-        defaultLevel: xaiDefaultReasoningEffort(modelId),
-        supportsSummaries: true,
-        mode: "controllable",
-        source: "provider-rule",
-        confidence: "documented",
-        wireFormat: { kind: "openai-reasoning-effort" }
-      };
-    }
-    return EMPTY_REASONING;
+    const ladder = xaiEffortLadder(modelId, metadata);
+    if (!ladder) return EMPTY_REASONING;
+    return {
+      levels: ladder.levels,
+      defaultLevel: xaiDefaultReasoningEffort(modelId),
+      supportsSummaries: true,
+      mode: "controllable",
+      source: ladder.source,
+      confidence: "documented",
+      wireFormat: { kind: "openai-reasoning-effort" }
+    };
   }
   if (isDeepSeekReasoningModel(modelId)) {
     const levels = deepSeekAcceptsNativeEfforts(metadata) ? [...DEEPSEEK_NATIVE_EFFORT_LEVELS] : [...DEEPSEEK_EFFORT_LEVELS];
@@ -2204,8 +2228,8 @@ function effortProviderOptions(npm, effort, modelId, metadata) {
     return reasoningEffort ? { openai: { reasoningEffort } } : void 0;
   }
   if (npm === "@ai-sdk/xai") {
-    if (!modelId || !isXaiReasoningEffortModel(modelId)) return void 0;
-    const reasoningEffort = mapCodexEffortToXai(effort, modelPrefersResponsesApi(modelId));
+    if (!modelId || !xaiEffortLadder(modelId, metadata)) return void 0;
+    const reasoningEffort = mapCodexEffortToXai(effort);
     return reasoningEffort ? { xai: { reasoningEffort } } : void 0;
   }
   if (npm === "@ai-sdk/anthropic" || npm === VERTEX_ANTHROPIC_NPM) {
@@ -5113,9 +5137,86 @@ function breakRecursiveSchemaRefs(schema) {
   const inlined = walk(schema, /* @__PURE__ */ new Set());
   return looped ? inlined : schema;
 }
+var XAI_NPM = "@ai-sdk/xai";
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function resolveLocalDefRef(value, defs) {
+  let current = value;
+  const seen = /* @__PURE__ */ new Set();
+  while (isPlainObject(current) && typeof current.$ref === "string" && current.$ref.startsWith("#/$defs/")) {
+    const name = current.$ref.slice("#/$defs/".length);
+    const target = defs?.[name];
+    if (!isPlainObject(target) || seen.has(name)) return void 0;
+    seen.add(name);
+    const sibling = { ...current };
+    delete sibling.$ref;
+    current = { ...target, ...sibling };
+  }
+  return isPlainObject(current) ? current : void 0;
+}
+function allowedStringValues(schema, defs) {
+  const resolved = resolveLocalDefRef(schema, defs);
+  if (!resolved) return void 0;
+  if (Array.isArray(resolved.enum)) {
+    const values = resolved.enum.filter((entry) => typeof entry === "string");
+    if (values.length > 0) return values;
+  }
+  if (typeof resolved.const === "string") return [resolved.const];
+  return void 0;
+}
+function mergePropertySchemas(first, second, defs) {
+  const firstValues = allowedStringValues(first, defs);
+  const secondValues = allowedStringValues(second, defs);
+  if (!firstValues || !secondValues) return first;
+  const union = [.../* @__PURE__ */ new Set([...firstValues, ...secondValues])];
+  const base = { ...resolveLocalDefRef(first, defs) ?? {} };
+  delete base.const;
+  return { ...base, enum: union };
+}
+function mergeBranchProperties(target, source, defs) {
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = key in target ? mergePropertySchemas(target[key], value, defs) : value;
+  }
+}
+function collectUnionBranchProperties(branches, defs) {
+  const properties = {};
+  let sawObjectBranch = false;
+  for (const branch of branches) {
+    const resolved = resolveLocalDefRef(branch, defs);
+    if (!resolved) continue;
+    const nested = Array.isArray(resolved.oneOf) ? resolved.oneOf : Array.isArray(resolved.anyOf) ? resolved.anyOf : void 0;
+    if (nested) {
+      const inner = collectUnionBranchProperties(nested, defs);
+      if (inner) {
+        mergeBranchProperties(properties, inner, defs);
+        sawObjectBranch = true;
+      }
+      continue;
+    }
+    if (resolved.type !== "object" && !isPlainObject(resolved.properties)) continue;
+    if (isPlainObject(resolved.properties)) mergeBranchProperties(properties, resolved.properties, defs);
+    sawObjectBranch = true;
+  }
+  return sawObjectBranch ? properties : null;
+}
+function flattenRootUnionSchema(schema) {
+  if (!isPlainObject(schema)) return schema;
+  const root = schema;
+  const branches = Array.isArray(root.oneOf) ? root.oneOf : Array.isArray(root.anyOf) ? root.anyOf : void 0;
+  if (!branches) return root;
+  const defs = isPlainObject(root.$defs) ? root.$defs : void 0;
+  const merged = isPlainObject(root.properties) ? { ...root.properties } : {};
+  mergeBranchProperties(merged, collectUnionBranchProperties(branches, defs) ?? {}, defs);
+  const out = { type: "object", properties: merged, additionalProperties: true };
+  if (defs) out.$defs = defs;
+  if (typeof root.description === "string") out.description = root.description;
+  return out;
+}
 function normalizeToolSchemaForNpm(schema, npm) {
   const acyclic = npm && RECURSION_SAFE_NPM.has(npm) ? schema : breakRecursiveSchemaRefs(schema);
   const portable = rewriteNulPatternEscapes(acyclic);
+  if (npm === XAI_NPM) return flattenRootUnionSchema(portable);
   if (!npm || !GOOGLE_NPM.has(npm)) return portable;
   return fixGoogleArraySchemas(collapseSchemaUnionTypes(portable));
 }

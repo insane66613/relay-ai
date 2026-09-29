@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **OpenCode Zen free-tier models are hidden from Relay.** OpenCode blocks its zero-cost free models (`*-free`, `big-pickle`) outside its own client, so calls from Relay return `403 OpenCode's free tier can only be used from within OpenCode`. They are no longer listed anywhere — Zen and Go alike — instead of being offered and failing. Paid Zen models and OpenCode Go are unaffected ([maintainer confirmation](https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322)).
+
+### Fixed
+
+- **Grok (xAI) works again in the Codex app instead of failing with `[invalid_client_tool_schema]`.** xAI rejected the whole request because one of the app's tools (`mcp__codex_app__automation_update`) declares its parameters as a root union instead of a plain object, and tool definitions ride on every request — so every grok turn, including plain chat, died before generating a token. Relay now restructures such roots into one object schema for xAI routes, keeping field descriptions and merging the mode-specific values.
+- **Grok 4.6 and 4.7 get their reasoning-effort levels.** xAI effort ladders are now read per model from models.dev instead of a fixed list: grok-4.6 / grok-4.7 offer Low / Medium / High / XHigh (default High), and grok-4.3 / grok-4.5 pick up their documented Medium rung. New xAI models appear without a Relay update; the hand-written list remains only as a fallback when no metadata is available.
+
 ## [0.15.3] - 2026-09-28
 
 ### Added

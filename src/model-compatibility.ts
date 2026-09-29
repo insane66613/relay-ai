@@ -41,6 +41,23 @@ export function isAntigravityCloudCodeHelperSlot(modelId: string): boolean {
   return ANTIGRAVITY_HELPER_SLOT.test(modelId);
 }
 
+/**
+ * OpenCode restricts its zero-cost Zen free-tier models (`*-free`,
+ * `big-pickle`) to the official OpenCode client — any third-party call gets
+ * `403 FreeTierError: "OpenCode's free tier can only be used from within
+ * OpenCode"` (maintainer statement, 2026-09-18:
+ * https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322).
+ * Hidden rather than blacklisted per id because the free lineup rotates; the
+ * ids surface through both the Zen and Go providers.
+ */
+const ZEN_FREE_TIER_PROVIDERS = new Set(['zen', 'go']);
+
+export function isZenFreeTierModel(providerId: string, modelId: string): boolean {
+  if (!ZEN_FREE_TIER_PROVIDERS.has(providerId)) return false;
+  const id = modelId.trim().toLowerCase();
+  return id === 'big-pickle' || id.endsWith('-free');
+}
+
 function matchesAgent(entryAgents: CompatibilityAgent[] | undefined, agent: CompatibilityAgent): boolean {
   if (!entryAgents || entryAgents.length === 0) return true;
   return entryAgents.includes(agent);
@@ -63,6 +80,10 @@ export function findBlacklistEntry(ctx: CompatibilityContext): IncompatibleModel
 export function hideReason(ctx: CompatibilityContext): string | null {
   if (ctx.providerId === 'antigravity' && isAntigravityCloudCodeHelperSlot(ctx.modelId)) {
     return '[antigravity-oauth] Cloud Code helper/internal slot';
+  }
+
+  if (isZenFreeTierModel(ctx.providerId, ctx.modelId)) {
+    return '[zen-free-tier] restricted to the OpenCode client (403 outside)';
   }
 
   const blacklist = findBlacklistEntry(ctx);
