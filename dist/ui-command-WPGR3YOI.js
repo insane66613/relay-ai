@@ -16,7 +16,6 @@ import {
   findClaudeApp,
   findCodexApp,
   formatGatewayUrls,
-  freeStatusLabel,
   gatewayProviderLabel,
   getServerDebugLogPath,
   getUiDebugLogPath,
@@ -42,7 +41,7 @@ import {
   supportsClaudeTransparentMode,
   updateCustomEndpointProvider,
   writeSecureLogLine
-} from "./chunk-H5M3HLZV.js";
+} from "./chunk-5XKBXWDW.js";
 import {
   init_provider_templates,
   listAddableTemplates,
@@ -56,6 +55,7 @@ import {
   VERSION,
   buildAntigravityAuthUrl,
   completeAntigravityExchange,
+  freeStatusLabel,
   getAppHome,
   getAppPathOverride,
   getEnvServerPassword,
@@ -95,7 +95,7 @@ import {
   setServerMaskGatewayIds,
   supportsManualModels,
   validateCustomEndpointUrl
-} from "./chunk-ZQMMM5BP.js";
+} from "./chunk-GCX2LYNR.js";
 import {
   __toCommonJS
 } from "./chunk-JIDIH7DS.js";
@@ -867,7 +867,7 @@ async function handleManualModel(req, res, action) {
     return;
   }
   try {
-    const { addManualModel, removeManualModel } = await import("./manual-models-M47NAKMB.js");
+    const { addManualModel, removeManualModel } = await import("./manual-models-LDKCZGSE.js");
     const result = action === "add" ? await addManualModel({
       providerId: providerId.trim(),
       modelId: modelId.trim(),
@@ -1896,4 +1896,4 @@ export {
   resolveUiShutdownDecision,
   runUiCommand
 };
-//# sourceMappingURL=ui-command-XXBGIVM2.js.map
+//# sourceMappingURL=ui-command-WPGR3YOI.js.map

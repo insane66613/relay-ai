@@ -179,9 +179,10 @@ describe('getReasoningCapabilities', () => {
       .toEqual({ xai: { reasoningEffort: 'medium' } });
   });
 
-  it('returns high/max/none for deepseek-v4-flash', () => {
+  it('returns high/xhigh/none for deepseek-v4-flash', () => {
     const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'deepseek-v4-flash');
-    expect(caps.levels).toEqual(['high', 'max', 'none']);
+    // `xhigh` is the label for the wire `max` value (Codex App drops `max`).
+    expect(caps.levels).toEqual(['high', 'xhigh', 'none']);
     expect(caps.defaultLevel).toBe('high');
   });
 
@@ -194,7 +195,7 @@ describe('getReasoningCapabilities', () => {
 
   it('keeps the legacy DeepSeek ladder away from OpenCode Go', () => {
     const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'deepseek-v4.1-flash', { providerId: 'deepseek' });
-    expect(caps.levels).toEqual(['high', 'max', 'none']);
+    expect(caps.levels).toEqual(['high', 'xhigh', 'none']);
   });
 
   it('recognizes namespaced Command Code DeepSeek ids with the native ladder', () => {
@@ -213,7 +214,7 @@ describe('getReasoningCapabilities', () => {
 
   it('keeps a namespaced DeepSeek id on the legacy ladder off Command Code', () => {
     const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'deepseek/deepseek-v4.1-flash', { providerId: 'deepseek' });
-    expect(caps.levels).toEqual(['high', 'max', 'none']);
+    expect(caps.levels).toEqual(['high', 'xhigh', 'none']);
   });
 
   it('recognizes namespaced Kimi ids', () => {
@@ -292,6 +293,153 @@ describe('getReasoningCapabilities', () => {
   });
 });
 
+describe('declared-first effort resolution', () => {
+  // models.dev declares effort levels per model; where a declaration exists it
+  // must drive the ladder (rule fallbacks stay for undeclared runs), and the
+  // mapper must put exactly those values on the wire.
+
+  it('gives Claude models their declared xhigh/max rungs and sends them top-level', () => {
+    const metadata = { reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] };
+    const caps = getReasoningCapabilities('@ai-sdk/anthropic', 'claude-opus-5', metadata);
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(caps.defaultLevel).toBe('high');
+    expect(caps.source).toBe('provider-metadata');
+    // The SDK emits providerOptions.anthropic.effort as output_config.effort;
+    // nesting it under thinking was silently stripped by the option schema.
+    expect(effortProviderOptions('@ai-sdk/anthropic', 'xhigh', 'claude-opus-5', metadata))
+      .toEqual({ anthropic: { effort: 'xhigh', thinking: { type: 'adaptive' } } });
+    expect(effortProviderOptions('@ai-sdk/anthropic', 'max', 'claude-opus-5', metadata))
+      .toEqual({ anthropic: { effort: 'max', thinking: { type: 'adaptive' } } });
+  });
+
+  it('keeps the legacy Anthropic collapse for undeclared Claude models', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/anthropic', 'claude-sonnet-4-6');
+    expect(caps.levels).toEqual(['low', 'medium', 'high']);
+    expect(caps.source).toBe('provider-rule');
+    expect(effortProviderOptions('@ai-sdk/anthropic', 'xhigh', 'claude-sonnet-4-6'))
+      .toEqual({ anthropic: { effort: 'high', thinking: { type: 'adaptive' } } });
+  });
+
+  it('offers the max rung a Claude 4.6 model declares without inventing xhigh', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/anthropic', 'claude-opus-4-6', {
+      reasoningEffortLevels: ['low', 'medium', 'high', 'max'],
+    });
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'max']);
+    expect(effortProviderOptions('@ai-sdk/anthropic', 'max', 'claude-opus-4-6', {
+      reasoningEffortLevels: ['low', 'medium', 'high', 'max'],
+    })).toEqual({ anthropic: { effort: 'max', thinking: { type: 'adaptive' } } });
+  });
+
+  it('adds declared Gemini thinkingLevel values verbatim (minimal included)', () => {
+    const metadata = { reasoningEffortLevels: ['minimal', 'low', 'medium', 'high'] };
+    const caps = getReasoningCapabilities('@ai-sdk/google', 'gemini-3.6-flash', metadata);
+    expect(caps.levels).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(caps.source).toBe('provider-metadata');
+    expect(effortProviderOptions('@ai-sdk/google', 'minimal', 'gemini-3.6-flash', metadata))
+      .toEqual({ google: { thinkingConfig: { thinkingLevel: 'minimal', includeThoughts: true } } });
+  });
+
+  it('lets a declared Gemini set win over the name-rule ladder (image variants)', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/google', 'gemini-3-pro-image', {
+      reasoningEffortLevels: ['low', 'high'],
+    });
+    expect(caps.levels).toEqual(['low', 'high']);
+  });
+
+  it('keeps Gemini 2.5 on its budget mapping even when effort levels are declared', () => {
+    const metadata = { reasoningEffortLevels: ['low', 'high'] };
+    const caps = getReasoningCapabilities('@ai-sdk/google', 'gemini-2.5-pro', metadata);
+    expect(caps.levels).toEqual(['low', 'medium', 'high']);
+    expect(caps.source).toBe('provider-rule');
+    expect(effortProviderOptions('@ai-sdk/google', 'low', 'gemini-2.5-pro', metadata))
+      .toEqual({ google: { thinkingConfig: { thinkingBudget: 1024, includeThoughts: true } } });
+  });
+
+  it('adds Kimi declared top-rung max as xhigh and sends it back as max', () => {
+    const metadata = { reasoningEffortLevels: ['low', 'high', 'max'] };
+    const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'kimi-k3', metadata);
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(effortProviderOptions('@ai-sdk/openai-compatible', 'xhigh', 'kimi-k3', metadata))
+      .toEqual({ openaiCompatible: { reasoningEffort: 'max' } });
+    expect(effortProviderOptions('@ai-sdk/openai-compatible', 'low', 'kimi-k3', metadata))
+      .toEqual({ openaiCompatible: { reasoningEffort: 'low' } });
+  });
+
+  it('sends declared DeepSeek levels verbatim instead of collapsing them', () => {
+    const metadata = { reasoningEffortLevels: ['low', 'high', 'max'] };
+    const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'deepseek-v4-flash', {
+      providerId: 'deepseek',
+      ...metadata,
+    });
+    // The rule keeps its label order for existing rungs; `low` surfaces as an
+    // addition, and the top rung stays the rule's `xhigh` label.
+    expect(caps.levels).toEqual(['low', 'high', 'xhigh', 'none']);
+    expect(effortProviderOptions('@ai-sdk/openai-compatible', 'low', 'deepseek-v4-flash', {
+      providerId: 'deepseek',
+      ...metadata,
+    })).toEqual({ deepseek: { reasoningEffort: 'low', thinking: { type: 'enabled' } } });
+    expect(effortProviderOptions('@ai-sdk/openai-compatible', 'xhigh', 'deepseek-v4-flash', {
+      providerId: 'deepseek',
+      ...metadata,
+    })).toEqual({ deepseek: { reasoningEffort: 'max', thinking: { type: 'enabled' } } });
+  });
+
+  it('keeps the native DeepSeek ladder untouched when declarations add nothing', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'deepseek-v4-flash', {
+      providerId: 'go',
+      reasoningEffortLevels: ['low', 'high', 'max'],
+    });
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh', 'none']);
+  });
+
+  it('resolves Mistral declared efforts to the existing none/high ladder', () => {
+    const metadata = { reasoningEffortLevels: ['none', 'high'] };
+    const caps = getReasoningCapabilities('@ai-sdk/mistral', 'mistral-medium-latest', metadata);
+    expect(caps.levels).toEqual(['high', 'none']);
+    expect(caps.source).toBe('provider-metadata');
+    expect(effortProviderOptions('@ai-sdk/mistral', 'none', 'mistral-medium-latest', metadata))
+      .toEqual({ mistral: { reasoningEffort: 'none' } });
+  });
+
+  it('offers Groq and Cerebras declared efforts verbatim', () => {
+    const metadata = { reasoningEffortLevels: ['none', 'low', 'medium', 'high'] };
+    const groq = getReasoningCapabilities('@ai-sdk/groq', 'qwen/qwen3.8-27b', metadata);
+    expect(groq.levels).toEqual(['none', 'low', 'medium', 'high']);
+    expect(groq.source).toBe('provider-metadata');
+    expect(effortProviderOptions('@ai-sdk/groq', 'low', 'qwen/qwen3.8-27b', metadata))
+      .toEqual({ groq: { reasoningEffort: 'low' } });
+    const cerebras = getReasoningCapabilities('@ai-sdk/cerebras', 'gpt-oss-120b', {
+      reasoningEffortLevels: ['low', 'medium', 'high'],
+    });
+    expect(cerebras.levels).toEqual(['low', 'medium', 'high']);
+    expect(effortProviderOptions('@ai-sdk/cerebras', 'high', 'gpt-oss-120b', {
+      reasoningEffortLevels: ['low', 'medium', 'high'],
+    })).toEqual({ cerebras: { reasoningEffort: 'high' } });
+  });
+
+  it('offers Perplexity declared efforts through the SDK-typed reasoning_effort', () => {
+    const metadata = { reasoningEffortLevels: ['minimal', 'low', 'medium', 'high'] };
+    const caps = getReasoningCapabilities('@ai-sdk/perplexity', 'sonar-deep-research', metadata);
+    expect(caps.levels).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(effortProviderOptions('@ai-sdk/perplexity', 'minimal', 'sonar-deep-research', metadata))
+      .toEqual({ perplexity: { reasoning_effort: 'minimal' } });
+  });
+
+  it('never invents Groq levels without a declaration', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/groq', 'qwen/qwen3.8-27b');
+    expect(caps.levels).toEqual([]);
+  });
+
+  it('suppresses declared sets when models.dev sources conflict', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/anthropic', 'claude-opus-5', {
+      reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      reasoningEffortConflict: true,
+    });
+    expect(caps.levels).toEqual(['low', 'medium', 'high']);
+    expect(caps.source).toBe('provider-rule');
+  });
+});
+
 describe('effortProviderOptions + deepMergeProviderOptions', () => {
   it('merges OpenAI thinking + effort without dropping store/include', () => {
     const merged = deepMergeProviderOptions(
@@ -316,9 +464,9 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     });
   });
 
-  it('maps Vertex Claude effort to Anthropic thinking options', () => {
+  it('maps Vertex Claude effort to the top-level Anthropic effort option', () => {
     expect(effortProviderOptions(VERTEX_ANTHROPIC_NPM, 'medium', 'claude-sonnet-4-6')).toEqual({
-      anthropic: { thinking: { type: 'adaptive', effort: 'medium' } },
+      anthropic: { effort: 'medium', thinking: { type: 'adaptive' } },
     });
   });
 });

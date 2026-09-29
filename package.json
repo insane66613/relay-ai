@@ -40,6 +40,7 @@
     "build": "tsup && tsup --config tsup.core.config.ts && node scripts/copy-ui-assets.mjs",
     "dev": "tsup --watch",
     "test": "vitest run --exclude \"tests/debug-*.test.ts\"",
+    "test:reasoning": "vitest run tests/reasoning-coverage.test.ts",
     "test:live": "vitest run tests/debug-xai.test.ts tests/debug-openai-oauth.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

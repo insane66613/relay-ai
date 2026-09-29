@@ -2,12 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Reasoning coverage check (`npm run test:reasoning`).** A test walks every provider Relay supports against the models.dev snapshot and fails when a model declares effort levels Relay cannot offer, with a documented, reasoned exclusion list for providers whose wire mapping is not verified yet (DeepInfra, Alibaba / Qwen Cloud, Cohere, Together). A new model that ships with declared effort levels now shows up as a failing row instead of surfacing weeks later as a missing slider.
+
 ### Changed
 
+- **Effort levels now come from each model's own declarations everywhere — not from per-model lists.** Every provider family resolves its ladder as *verified family ladder ∪ models.dev-declared levels*, filtered down to what the family's wire can actually send (a level that would be silently downgraded is dropped, never sent as something weaker). New models get their true ladders without a Relay update, and several existing gaps close: Claude models gain the `xhigh`/`max` rungs they declare (Opus 4.8/5, Sonnet 5, Fable), Gemini 3.x gains `minimal`, Kimi gains its declared top rung (shown as XHigh, sent as `max`), direct-DeepSeek gains declared `low`, and Groq / Cerebras / Perplexity models gain their declared effort levels. DeepSeek's non-Go top rung also relabels from Max to XHigh, matching the label the Codex app accepts.
 - **OpenCode Zen free-tier models are hidden from Relay.** OpenCode blocks its zero-cost free models (`*-free`, `big-pickle`) outside its own client, so calls from Relay return `403 OpenCode's free tier can only be used from within OpenCode`. They are no longer listed anywhere — Zen and Go alike — instead of being offered and failing. Paid Zen models and OpenCode Go are unaffected ([maintainer confirmation](https://github.com/anomalyco/opencode/issues/49621#issuecomment-5723383322)).
 
 ### Fixed
 
+- **Claude effort now actually reaches the model.** The selected effort was sent nested inside `thinking`, where the provider SDK's option schema silently stripped it before the request left Relay — every Claude effort choice was a no-op. It now rides the SDK's top-level `anthropic.effort` (emitted as `output_config.effort`) alongside adaptive thinking. `claude-opus-5`-style names (no minor version) are also recognized as adaptive-thinking models now.
 - **Grok (xAI) works again in the Codex app instead of failing with `[invalid_client_tool_schema]`.** xAI rejected the whole request because one of the app's tools (`mcp__codex_app__automation_update`) declares its parameters as a root union instead of a plain object, and tool definitions ride on every request — so every grok turn, including plain chat, died before generating a token. Relay now restructures such roots into one object schema for xAI routes, keeping field descriptions and merging the mode-specific values.
 - **Grok 4.6 and 4.7 get their reasoning-effort levels.** xAI effort ladders are now read per model from models.dev instead of a fixed list: grok-4.6 / grok-4.7 offer Low / Medium / High / XHigh (default High), and grok-4.3 / grok-4.5 pick up their documented Medium rung. New xAI models appear without a Relay update; the hand-written list remains only as a fallback when no metadata is available.
 

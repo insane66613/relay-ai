@@ -2,11 +2,10 @@
 import {
   addManualModel,
   removeManualModel
-} from "./chunk-VPAVH3B6.js";
+} from "./chunk-PEY7WXUK.js";
 import {
   CODEX_APP_AUTO_COMPACT_RATIO,
   CODEX_APP_PROVIDER_ID,
-  EFFORT_RANK,
   OPENCODE_SESSION_HEADER,
   PREVIEW_PROXY_PORT,
   addCustomEndpointProvider,
@@ -75,14 +74,11 @@ import {
   isClaudeAppRunning,
   isCodexAppRunning,
   isFavorite,
-  isFreeStatus,
   isLikelyPlaceholderKey,
-  isModelsDevCacheStale,
   isOAuthImportProvider,
   launchOrRestartClaudeApp,
   launchOrRestartCodexApp,
   listCredentialSkippedProviders,
-  loadModelsDevCache,
   logActiveModel,
   logConnected,
   logProxy,
@@ -115,7 +111,6 @@ import {
   quitCodexAppGracefully,
   readBody,
   refreshAllProviderModels,
-  refreshModelsDevCacheAsync,
   refreshProviderModels,
   relayIntro,
   relayOutro,
@@ -146,7 +141,7 @@ import {
   waitForCodexAppQuit,
   writeSecureLogLine,
   zenRegistryStub
-} from "./chunk-H5M3HLZV.js";
+} from "./chunk-5XKBXWDW.js";
 import {
   filterTemplates,
   getTemplateById,
@@ -163,6 +158,7 @@ import {
   CODEX_RESPONSES_WEBSOCKETS_BETA,
   CODEX_SUBAGENT_MODEL_CAP,
   CONFLICTING_ENV_VARS,
+  EFFORT_RANK,
   GLOBAL_OPENCODE_KEYRING_ACCOUNT,
   MAX_MODEL_CATALOG,
   VERSION,
@@ -188,8 +184,11 @@ import {
   getReasoningCapabilities,
   grabRoundTripSignature,
   injectClaudeIdentity,
+  isFreeStatus,
+  isModelsDevCacheStale,
   isSecretServiceAvailable,
   isValidProviderId,
+  loadModelsDevCache,
   loadPreferences,
   loadRegistry,
   maxToolsForNpm,
@@ -206,6 +205,7 @@ import {
   readOpencodeAuthFile,
   readStoredProviderCredential,
   recordLaunchSelection,
+  refreshModelsDevCacheAsync,
   resolveApiKey,
   resolveContextWindow,
   resolveProviderCredential,
@@ -226,7 +226,7 @@ import {
   thinkingProviderOptions,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-ZQMMM5BP.js";
+} from "./chunk-GCX2LYNR.js";
 import "./chunk-JIDIH7DS.js";
 
 // src/cli.ts
@@ -16387,7 +16387,7 @@ Options:
   --trace    Write debug logs under ~/.relay-ai/logs/`);
       return 0;
     }
-    const { runUiCommand } = await import("./ui-command-XXBGIVM2.js");
+    const { runUiCommand } = await import("./ui-command-WPGR3YOI.js");
     return runUiCommand({ trace: parsed.trace, serverMode: parsed.uiServerMode });
   }
   if (parsed.command === "models") {

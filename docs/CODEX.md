@@ -317,7 +317,7 @@ For CLI favorites, the launched Codex child gets `OPENAI_API_KEY=proxy-local`, n
 
 ### Reasoning effort
 
-The reasoning-effort slider in the Codex picker is shown only for models with a resolver-backed controllable reasoning profile. OpenRouter uses provider metadata (`supported_parameters`) when available; generic `@ai-sdk/openai-compatible` providers stay hidden unless relay-ai has a verified provider rule.
+The reasoning-effort slider in the Codex picker is shown only for models with a resolver-backed controllable reasoning profile. Resolution is declared-first: a family's verified ladder is combined with the levels the model declares on models.dev, then filtered down to levels that map to distinct wire values — a level that would be silently downgraded is dropped rather than sent as something weaker. OpenRouter additionally requires `reasoning` in the model's `supported_parameters`; generic `@ai-sdk/openai-compatible` routes offer the model's declared levels verbatim (that covers OpenCode Go/Zen, Nvidia, Venice, Command Code, and similar).
 
 ### Proxy warm-up
 
@@ -348,7 +348,7 @@ Subscription tokens, including GitHub Copilot, xAI, ChatGPT OAuth, and ClinePass
 
 ## Reasoning effort
 
-Codex exposes a **reasoning effort** picker when relay-ai's model catalog includes supported levels. relay-ai fills `supported_reasoning_levels`, `default_reasoning_level`, and `supports_reasoning_summaries` from the centralized reasoning resolver, using provider metadata first and provider-specific rules second.
+Codex exposes a **reasoning effort** picker when relay-ai's model catalog includes supported levels. relay-ai fills `supported_reasoning_levels`, `default_reasoning_level`, and `supports_reasoning_summaries` from the centralized reasoning resolver, which unions each provider family's verified ladder with the model's own models.dev declarations and keeps only levels that map to distinct wire values. `npm run test:reasoning` runs the coverage check against the bundled models.dev snapshot and fails when a declaring model is not offered its levels.
 
 **You control effort in Codex's native UI** — relay-ai does not add its own menu. For `relay-ai codex-app`, an existing `model_reasoning_effort` in `~/.codex/config.toml` is **preserved** (not deleted on launch).
 
@@ -356,15 +356,18 @@ Codex exposes a **reasoning effort** picker when relay-ai's model catalog includ
 
 | Provider npm | Example models | Picker levels | Wire mapping |
 |--------------|----------------|---------------|--------------|
-| `@ai-sdk/anthropic` | claude-sonnet-4-6, claude-opus-4-6 | low, medium, high | SDK `thinking: adaptive` + `effort` |
-| `@ai-sdk/openai` | gpt-5.5, gpt-5.4-codex | low, medium, high, xhigh | `reasoningEffort` on Responses API |
-| `@ai-sdk/google` | gemini-2.5-pro, gemini-3-flash | low, medium, high | Gemini 2.5 → token budget; Gemini 3 → `thinkingLevel` |
-| `@ai-sdk/mistral` | mistral-large, magistral-* | **high, off only** | `reasoningEffort: high \| none` |
-| `@ai-sdk/xai` | grok-* | none, low, medium, high | `reasoningEffort` |
-| `@openrouter/ai-sdk-provider` | z-ai/glm-5.2, provider models with `reasoning` in `supported_parameters` | none, minimal, low, medium, high, xhigh | `providerOptions.openrouter.reasoning.effort` |
-| `@ai-sdk/openai-compatible` | unknown backends | *(picker hidden)* | no effort sent |
+| `@ai-sdk/anthropic` | claude-opus-5, claude-sonnet-4-6 | per model: low/medium/high, plus `xhigh`/`max` where the model declares them | top-level `anthropic.effort` + adaptive thinking |
+| `@ai-sdk/openai` | gpt-5.5, gpt-6 | per model — the verified OpenAI table first, declared levels for newer models (up to `max`) | `reasoningEffort` on the Responses API |
+| `@ai-sdk/google` | gemini-2.5-pro, gemini-3.6-flash | per model: `minimal`/low/medium/high on Gemini 3-class models; low/medium/high on 2.5 | Gemini 3 → `thinkingLevel`; 2.5 → token budget |
+| `@ai-sdk/mistral` | mistral-medium-2604, magistral-* | high, none | `reasoningEffort: high \| none` |
+| `@ai-sdk/xai` | grok-4.5 … grok-4.7 | low/medium/high (plus `xhigh` on 4.6+) | `reasoningEffort` |
+| `@ai-sdk/groq`, `@ai-sdk/cerebras` | gpt-oss-120b, qwen3.8-27b | per model (declared) | `reasoningEffort` |
+| `@ai-sdk/perplexity` | sonar-deep-research | per model (declared: minimal..high) | `reasoning_effort` |
+| `@openrouter/ai-sdk-provider` | models with `reasoning` in `supported_parameters` | none..xhigh (declared `max` shows as XHigh) | `providerOptions.openrouter.reasoning.effort` |
+| `@ai-sdk/openai-compatible` | OpenCode Go/Zen, Nvidia, Venice, Command Code, … | per model (declared, verbatim) | `<providerId>: { reasoningEffort }` |
+| other packages (DeepInfra, Together, Cohere, Alibaba / Qwen Cloud, …) | — | *(picker hidden until a verified wire mapping exists)* | no effort sent |
 
-**Partial support:** Mistral only supports on/off — relay-ai shows `high` and `off`, not low/medium. Gemini 2.5 uses token budgets under the hood; the picker labels are low/medium/high for UX consistency.
+**Labels:** the top rung is shown as `xhigh` wherever the wire value is `max` (the Codex app drops `max`), and as `max` where that is the model's own declared value for a first-class API. Mistral only supports on/off — relay-ai shows `high` and `none`. Gemini 2.5 uses token budgets under the hood; the picker labels are low/medium/high for UX consistency.
 
 **Local providers:** Same heuristics apply. Unrecognized models (e.g. Ollama `llama3:8b`) get an empty picker — best-effort, no v1 guarantee.
 

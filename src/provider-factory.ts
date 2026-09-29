@@ -4,6 +4,7 @@
 import type { LanguageModel, LanguageModelMiddleware } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
 import { VERTEX_ANTHROPIC_NPM, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
+import { EFFORT_RANK } from './registry/models-dev.js';
 import { resolveCodexClientVersion } from './codex/version.js';
 import { extractOpenAiAccountId } from './oauth/openai.js';
 import { createResponsesWebSocketFetch } from './oauth/responses-websocket.js';
@@ -733,14 +734,17 @@ const XAI_XHIGH_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const XAI_WIRE_EFFORT_LEVELS = new Set<string>(['low', 'medium', 'high', 'xhigh']);
 const OPENROUTER_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 /**
- * DeepSeek V4 wire values (low/medium map to high; xhigh maps to max).
+ * DeepSeek V4 ladder for routes that take the legacy collapse (low/medium map
+ * to high; `xhigh` maps to max). `xhigh`, not `max`, is the label: Codex App's
+ * slider vocabulary stops at `xhigh` and silently drops `max`, and both send
+ * the same wire value anyway.
  *
  * `none` (not `off`) turns thinking off: Codex App validates effort values
  * against a fixed vocabulary (`none, minimal, low, medium, high, xhigh, max,
  * ultra`) and drops `off`, which broke its effort control for this model even
  * though the wire mapping below treats the two identically.
  */
-const DEEPSEEK_EFFORT_LEVELS = ['high', 'max', 'none'] as const;
+const DEEPSEEK_EFFORT_LEVELS = ['high', 'xhigh', 'none'] as const;
 /**
  * OpenCode Go/Zen accept DeepSeek's native ladder, and Codex App's effort
  * slider needs the medium-anchored `low/medium/high` rungs to render at all.
@@ -766,6 +770,108 @@ const GLM_53_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
  * declared level.
  */
 const GENERIC_EFFORT_VOCAB = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * The wire values each family's mapper can actually send, as advertised
+ * labels. Declared levels outside a family's set are dropped there — never
+ * guessed onto another value.
+ */
+const ANTHROPIC_WIRE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+/** Gemini 3-class `thinkingLevel` vocabulary (SDK-typed: minimal..high). */
+const GEMINI_DECLARED_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
+/** Values the Groq/Cerebras `reasoningEffort` provider option accepts. */
+const GROQ_CEREBRAS_WIRE_EFFORT_LEVELS = ['none', 'low', 'medium', 'high'] as const;
+/** Values the Perplexity `reasoning_effort` provider option accepts. */
+const PERPLEXITY_WIRE_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
+
+/** Identity normalizer bounded by a family's wire vocabulary. */
+function wireVocabulary(vocab: readonly string[]): (value: string) => string | undefined {
+  const allowed = new Set<string>(vocab);
+  return value => (allowed.has(value) ? value : undefined);
+}
+
+const normalizeAnthropicDeclared = wireVocabulary(ANTHROPIC_WIRE_EFFORT_LEVELS);
+const normalizeGeminiDeclared = wireVocabulary(GEMINI_DECLARED_EFFORT_LEVELS);
+const normalizeMistralDeclared = wireVocabulary(MISTRAL_EFFORT_LEVELS);
+const normalizeGroqDeclared = wireVocabulary(GROQ_CEREBRAS_WIRE_EFFORT_LEVELS);
+const normalizePerplexityDeclared = wireVocabulary(PERPLEXITY_WIRE_EFFORT_LEVELS);
+
+/**
+ * Families whose top declared rung is the wire value `max`: Relay advertises
+ * it as `xhigh` (its established label for that value across surfaces) and the
+ * mapper sends `max` back. Everything else in the rank vocabulary passes
+ * through; unmappable values are dropped later by the wire filter.
+ */
+function normalizeTopRungDeclared(value: string): string | undefined {
+  if (value === 'max') return 'xhigh';
+  return EFFORT_RANK.includes(value) ? value : undefined;
+}
+
+/**
+ * models.dev-declared effort levels for a family, normalized into Relay labels
+ * and returned in canonical low→high order. A `normalize` that returns
+ * undefined drops a value the family cannot express; conflicting declarations
+ * suppress the set entirely (treated as undeclared, never guessed at).
+ */
+function declaredEffortLevels(
+  metadata: ReasoningMetadata | undefined,
+  normalize: (value: string) => string | undefined,
+): string[] {
+  if (!metadata || metadata.reasoningEffortConflict) return [];
+  const declared = metadata.reasoningEffortLevels;
+  if (!declared || declared.length === 0) return [];
+  const labels = new Set<string>();
+  for (const value of declared) {
+    const label = normalize(value.trim().toLowerCase());
+    if (label) labels.add(label);
+  }
+  return EFFORT_RANK.filter(rank => labels.has(rank));
+}
+
+/**
+ * Rule-first union of a family's verified ladder and the declared levels.
+ *
+ * The rule ladder keeps its established order and labels. Declared levels are
+ * added only when they reach the wire as bytes the rule ladder does not
+ * already produce — an addition never renames an existing rung (where the
+ * legacy collapse maps `low` and `high` to one wire value, `low` is dropped
+ * rather than substituted), and additions are inserted at their rank position
+ * so a newly surfaced `minimal` leads the ladder. `withMappableLevels` still
+ * runs afterwards as the final guard.
+ */
+function unionEffortLevels(
+  rule: readonly string[] | null,
+  declared: readonly string[],
+  npm: string,
+  modelId: string,
+  metadata?: ReasoningMetadata,
+): string[] {
+  const base = rule ? [...rule] : [];
+  const wires = new Set<string>();
+  for (const level of base) {
+    const mapped = effortProviderOptions(npm, level, modelId, metadata);
+    if (mapped !== undefined) wires.add(JSON.stringify(mapped));
+  }
+  const additions: string[] = [];
+  for (const level of declared) {
+    if (base.includes(level) || additions.includes(level)) continue;
+    const mapped = effortProviderOptions(npm, level, modelId, metadata);
+    if (mapped === undefined) continue;
+    const wire = JSON.stringify(mapped);
+    if (wires.has(wire)) continue;
+    wires.add(wire);
+    additions.push(level);
+  }
+  if (additions.length === 0) return base;
+  const merged = [...base];
+  for (const level of additions) {
+    const rank = EFFORT_RANK.indexOf(level);
+    const index = merged.findIndex(existing => EFFORT_RANK.indexOf(existing) > rank);
+    if (index === -1) merged.push(level);
+    else merged.splice(index, 0, level);
+  }
+  return merged;
+}
 
 const EMPTY_REASONING: ReasoningCapabilities = {
   levels: [],
@@ -797,15 +903,19 @@ const GEMINI_25_BUDGETS: Record<string, number> = {
   none: 0,
 };
 
-/** Claude adaptive-thinking models (opus/sonnet/haiku 4.6+, fable, mythos). */
+/**
+ * Claude adaptive-thinking models (opus/sonnet/haiku 4.6+, fable, mythos).
+ * The minor version is optional so bare releases like `claude-opus-5` — and
+ * any later major — classify without a table edit.
+ */
 function isClaudeReasoningModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   if (!lower.startsWith('claude-')) return false;
   if (lower.includes('fable') || lower.includes('mythos')) return true;
-  const m = lower.match(/claude-(?:opus|sonnet|haiku)-(\d+)-(\d+)/);
+  const m = lower.match(/claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d+))?/);
   if (!m) return false;
   const major = Number(m[1]);
-  const minor = Number(m[2]);
+  const minor = m[2] !== undefined ? Number(m[2]) : 0;
   return major > 4 || (major === 4 && minor >= 6);
 }
 
@@ -1076,7 +1186,13 @@ function deepSeekEffortProviderOptions(
   effort: string,
   metadata?: ReasoningMetadata,
 ): Record<string, Record<string, unknown>> | undefined {
-  const mapped = mapCodexEffortToDeepSeek(effort, deepSeekAcceptsNativeEfforts(metadata));
+  // A declared level wins and goes to the wire as itself; the legacy collapse
+  // stays for undeclared rungs (and for `none`, whose established mapping is
+  // the `off` value plus thinking disabled).
+  const declared = declaredEffortLevels(metadata, normalizeTopRungDeclared);
+  const mapped = declared.includes(effort) && effort !== 'none'
+    ? (effort === 'xhigh' ? 'max' : effort)
+    : mapCodexEffortToDeepSeek(effort, deepSeekAcceptsNativeEfforts(metadata));
   if (!mapped) return undefined;
   const key = metadata?.providerId ? toCamelCase(metadata.providerId) : 'openaiCompatible';
   const thinking = { type: mapped === 'off' ? 'disabled' : 'enabled' };
@@ -1369,14 +1485,23 @@ function resolveRawReasoningCapabilities(
 
   if (npm === '@ai-sdk/anthropic' || id.startsWith('claude-')) {
     const isClaude = isClaudeReasoningModel(modelId);
-    if (isClaude || metadata?.reasoning) {
+    const declared = declaredEffortLevels(metadata, normalizeAnthropicDeclared);
+    if (isClaude || metadata?.reasoning || declared.length > 0) {
+      const levels = unionEffortLevels(
+        isClaude ? ANTHROPIC_EFFORT_LEVELS : null,
+        declared,
+        npm,
+        modelId,
+        metadata,
+      );
+      if (levels.length === 0) return EMPTY_REASONING;
       return {
-        levels: [...ANTHROPIC_EFFORT_LEVELS],
-        defaultLevel: 'high',
+        levels,
+        defaultLevel: levels.includes('high') ? 'high' : nearestToMediumEffort(levels),
         supportsSummaries: true,
         mode: 'controllable',
-        source: isClaude ? 'provider-rule' : 'model-metadata',
-        confidence: isClaude ? 'documented' : 'inferred',
+        source: declared.length > 0 ? 'provider-metadata' : isClaude ? 'provider-rule' : 'model-metadata',
+        confidence: declared.length > 0 || isClaude ? 'documented' : 'inferred',
         wireFormat: { kind: 'anthropic-thinking' },
       };
     }
@@ -1409,13 +1534,31 @@ function resolveRawReasoningCapabilities(
   }
 
   if (npm === '@ai-sdk/google' || id.startsWith('gemini-')) {
-    if (isGeminiReasoningModel(modelId)) {
+    const declared = declaredEffortLevels(metadata, normalizeGeminiDeclared);
+    const isGemini = isGeminiReasoningModel(modelId);
+    // Gemini 2.5 controls thinking with a token budget, not a level — a
+    // declared effort row there (any reseller can add one) does not apply.
+    const budgetEra = /^gemini-2[.-]5/.test(id);
+    if (declared.length > 0 || isGemini) {
+      // Google publishes the accepted `thinkingLevel` set per model, so a
+      // declared set IS the ladder (image variants declare subsets). Otherwise
+      // the name rule's ladder stands, extended with any declared rungs.
+      const levels = declared.length > 0 && !budgetEra
+        ? declared
+        : unionEffortLevels(
+          isGemini ? GEMINI_EFFORT_LEVELS : null,
+          budgetEra ? [] : declared,
+          npm,
+          modelId,
+          metadata,
+        );
+      if (levels.length === 0) return EMPTY_REASONING;
       return {
-        levels: [...GEMINI_EFFORT_LEVELS],
-        defaultLevel: 'medium',
+        levels,
+        defaultLevel: levels.includes('medium') ? 'medium' : nearestToMediumEffort(levels),
         supportsSummaries: true,
         mode: 'controllable',
-        source: 'provider-rule',
+        source: declared.length > 0 && !budgetEra ? 'provider-metadata' : 'provider-rule',
         confidence: 'documented',
         wireFormat: { kind: 'google-thinking-config' },
       };
@@ -1424,13 +1567,23 @@ function resolveRawReasoningCapabilities(
   }
 
   if (npm === '@ai-sdk/mistral') {
-    if (isMistralReasoningModel(modelId)) {
+    const declared = declaredEffortLevels(metadata, normalizeMistralDeclared);
+    const isMistral = isMistralReasoningModel(modelId);
+    if (declared.length > 0 || isMistral) {
+      const levels = unionEffortLevels(
+        isMistral ? MISTRAL_EFFORT_LEVELS : null,
+        declared,
+        npm,
+        modelId,
+        metadata,
+      );
+      if (levels.length === 0) return EMPTY_REASONING;
       return {
-        levels: [...MISTRAL_EFFORT_LEVELS],
-        defaultLevel: 'high',
+        levels,
+        defaultLevel: levels.includes('high') ? 'high' : nearestToMediumEffort(levels),
         supportsSummaries: false,
         mode: 'controllable',
-        source: 'provider-rule',
+        source: declared.length > 0 ? 'provider-metadata' : 'provider-rule',
         confidence: 'documented',
         wireFormat: { kind: 'mistral-reasoning-effort' },
       };
@@ -1457,55 +1610,83 @@ function resolveRawReasoningCapabilities(
   if (isDeepSeekReasoningModel(modelId)) {
     // Codex App's effort slider is built from a medium-anchored ladder, so a
     // `high/max/off`-only set rendered no control at all. Where the route
-    // accepts the native values, offer the real ladder.
-    const levels = deepSeekAcceptsNativeEfforts(metadata)
-      ? [...DEEPSEEK_NATIVE_EFFORT_LEVELS]
-      : [...DEEPSEEK_EFFORT_LEVELS];
+    // accepts the native values, offer the real ladder; declared rungs the
+    // rule lacks (e.g. direct-API `low`) surface on top of it.
+    const declared = declaredEffortLevels(metadata, normalizeTopRungDeclared);
+    const rule = deepSeekAcceptsNativeEfforts(metadata)
+      ? DEEPSEEK_NATIVE_EFFORT_LEVELS
+      : DEEPSEEK_EFFORT_LEVELS;
     return {
-      levels,
+      levels: unionEffortLevels(rule, declared, npm, modelId, metadata),
       defaultLevel: 'high',
       supportsSummaries: true,
       mode: 'controllable',
-      source: 'provider-rule',
+      source: declared.length > 0 ? 'provider-metadata' : 'provider-rule',
       confidence: 'documented',
       wireFormat: { kind: 'deepseek-thinking' },
     };
   }
 
   if (isKimiReasoningModel(modelId)) {
+    const declared = declaredEffortLevels(metadata, normalizeTopRungDeclared);
+    const levels = unionEffortLevels(OPENAI_EFFORT_LEVELS, declared, npm, modelId, metadata);
     return {
-      levels: [...OPENAI_EFFORT_LEVELS],
-      defaultLevel: 'high',
+      levels,
+      defaultLevel: levels.includes('high') ? 'high' : nearestToMediumEffort(levels),
       supportsSummaries: false,
       mode: 'controllable',
-      source: 'provider-rule',
+      source: declared.length > 0 ? 'provider-metadata' : 'provider-rule',
       confidence: 'documented',
       wireFormat: { kind: 'openai-reasoning-effort' },
     };
   }
 
   if (isGlm53ReasoningModel(modelId)) {
+    const declared = declaredEffortLevels(metadata, normalizeTopRungDeclared);
+    const levels = unionEffortLevels(GLM_53_EFFORT_LEVELS, declared, npm, modelId, metadata);
     return {
-      levels: [...GLM_53_EFFORT_LEVELS],
-      defaultLevel: 'high',
+      levels,
+      defaultLevel: levels.includes('high') ? 'high' : nearestToMediumEffort(levels),
       supportsSummaries: false,
       mode: 'controllable',
-      source: 'provider-rule',
+      source: declared.length > 0 ? 'provider-metadata' : 'provider-rule',
       confidence: 'documented',
       wireFormat: { kind: 'openai-reasoning-effort' },
     };
   }
 
   if (isGlm52ReasoningModel(modelId)) {
+    const declared = declaredEffortLevels(metadata, normalizeTopRungDeclared);
+    const levels = unionEffortLevels(GLM_52_EFFORT_LEVELS, declared, npm, modelId, metadata);
     return {
-      levels: [...GLM_52_EFFORT_LEVELS],
-      defaultLevel: 'high',
+      levels,
+      defaultLevel: levels.includes('high') ? 'high' : nearestToMediumEffort(levels),
       supportsSummaries: false,
       mode: 'controllable',
-      source: 'provider-rule',
+      source: declared.length > 0 ? 'provider-metadata' : 'provider-rule',
       confidence: 'documented',
       wireFormat: { kind: 'openai-reasoning-effort' },
     };
+  }
+
+  // Groq / Cerebras / Perplexity: the SDK types a `reasoningEffort` provider
+  // option with a fixed vocabulary, so declared levels can be offered verbatim
+  // with no per-model rule at all. Sources are listed in the SDK's own option
+  // schemas (groq/cerebras: none..high; perplexity: minimal..high).
+  if (npm === '@ai-sdk/groq' || npm === '@ai-sdk/cerebras' || npm === '@ai-sdk/perplexity') {
+    const normalize = npm === '@ai-sdk/perplexity' ? normalizePerplexityDeclared : normalizeGroqDeclared;
+    const levels = declaredEffortLevels(metadata, normalize);
+    if (levels.length > 0) {
+      return {
+        levels,
+        defaultLevel: nearestToMediumEffort(levels),
+        supportsSummaries: false,
+        mode: 'controllable',
+        source: 'provider-metadata',
+        confidence: 'documented',
+        wireFormat: { kind: 'openai-reasoning-effort' },
+      };
+    }
   }
 
   // Generic models.dev-declared effort levels (openai-compatible route only —
@@ -1620,16 +1801,52 @@ export function effortProviderOptions(
     return reasoningEffort ? { xai: { reasoningEffort } } : undefined;
   }
 
+  // SDK-typed `reasoningEffort` options on three first-party packages whose
+  // model ladders are declared per model (no name rules). Values go verbatim;
+  // a sensitivity to values outside the SDK enum can never arise because the
+  // capability side advertises exactly this set.
+  if (npm === '@ai-sdk/groq' || npm === '@ai-sdk/cerebras') {
+    const declared = declaredEffortLevels(metadata, normalizeGroqDeclared);
+    if (!declared.includes(effort)) return undefined;
+    const key = npm === '@ai-sdk/groq' ? 'groq' : 'cerebras';
+    return { [key]: { reasoningEffort: effort } };
+  }
+
+  if (npm === '@ai-sdk/perplexity') {
+    const declared = declaredEffortLevels(metadata, normalizePerplexityDeclared);
+    if (!declared.includes(effort)) return undefined;
+    return { perplexity: { reasoning_effort: effort } };
+  }
+
   if (npm === '@ai-sdk/anthropic' || npm === VERTEX_ANTHROPIC_NPM) {
-    if (!modelId || !isClaudeReasoningModel(modelId)) return undefined;
+    if (!modelId) return undefined;
+    // Effort rides the SDK's top-level `anthropic.effort` (which it emits as
+    // `output_config.effort`). It used to be nested inside `thinking`, where
+    // the provider option schema silently stripped it — the selected level
+    // never reached the wire. Adaptive thinking stays as the mode request.
+    const declared = declaredEffortLevels(metadata, normalizeAnthropicDeclared);
+    if (declared.includes(effort)) {
+      return {
+        anthropic: {
+          effort,
+          ...(isClaudeReasoningModel(modelId) ? { thinking: { type: 'adaptive' } } : {}),
+        },
+      };
+    }
+    if (!isClaudeReasoningModel(modelId)) return undefined;
     const mapped = mapCodexEffortToAnthropic(effort);
     return mapped
-      ? { anthropic: { thinking: { type: 'adaptive', effort: mapped } } }
+      ? { anthropic: { effort: mapped, thinking: { type: 'adaptive' } } }
       : undefined;
   }
 
   if (npm === '@ai-sdk/google') {
     const id = modelId ?? '';
+    const declared = declaredEffortLevels(metadata, normalizeGeminiDeclared);
+    if (declared.length > 0 && !/^gemini-2[.-]5/.test(id.toLowerCase())) {
+      if (!declared.includes(effort)) return undefined;
+      return { google: { thinkingConfig: { thinkingLevel: effort, includeThoughts: true } } };
+    }
     if (isGemini3Model(id)) {
       const thinkingLevel = mapCodexEffortToGeminiLevel(effort);
       return thinkingLevel
@@ -1654,7 +1871,12 @@ export function effortProviderOptions(
       return deepSeekEffortProviderOptions(effort, metadata);
     }
     if (isKimiReasoningModel(modelId)) {
-      const reasoningEffort = mapCodexEffortToOpenAICompatible(effort);
+      // A declared top rung arrives as `max` (normalized to `xhigh`) and is
+      // sent by that name; undeclared rungs keep the legacy collapse.
+      const declared = declaredEffortLevels(metadata, normalizeTopRungDeclared);
+      const reasoningEffort = declared.includes(effort)
+        ? (effort === 'xhigh' ? 'max' : effort)
+        : mapCodexEffortToOpenAICompatible(effort);
       if (reasoningEffort) {
         const key = metadata?.providerId ? toCamelCase(metadata.providerId) : 'openaiCompatible';
         return { [key]: { reasoningEffort } };
