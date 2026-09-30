@@ -2,7 +2,7 @@
 import {
   addManualModel,
   removeManualModel
-} from "./chunk-HZSYUOCZ.js";
+} from "./chunk-7OHT4O5H.js";
 import {
   CODEX_APP_AUTO_COMPACT_RATIO,
   CODEX_APP_PROVIDER_ID,
@@ -141,7 +141,7 @@ import {
   waitForCodexAppQuit,
   writeSecureLogLine,
   zenRegistryStub
-} from "./chunk-GM54XDPC.js";
+} from "./chunk-FZF5COIF.js";
 import {
   filterTemplates,
   getTemplateById,
@@ -226,7 +226,7 @@ import {
   thinkingProviderOptions,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-H22LRVBQ.js";
+} from "./chunk-EU3BWRER.js";
 import "./chunk-JIDIH7DS.js";
 
 // src/cli.ts
@@ -16387,7 +16387,7 @@ Options:
   --trace    Write debug logs under ~/.relay-ai/logs/`);
       return 0;
     }
-    const { runUiCommand } = await import("./ui-command-C7U34KOI.js");
+    const { runUiCommand } = await import("./ui-command-K5KS4B6G.js");
     return runUiCommand({ trace: parsed.trace, serverMode: parsed.uiServerMode });
   }
   if (parsed.command === "models") {
