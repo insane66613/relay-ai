@@ -639,7 +639,11 @@ export async function refreshProviderModels(
       }
     } else if (source === 'cline-recommended') {
       try {
-        models = await fetchClinePassModels();
+        models = await fetchClinePassModels(
+          apiKey?.trim()
+            ? { credential: apiKey.trim(), authType: provider.authType === 'oauth' ? 'oauth' : 'api' }
+            : undefined,
+        );
         baseUrl = provider.api.url ?? 'https://api.cline.bot/api/v1';
       } catch (err) {
         if (cachedModelCount(provider) > 0) {

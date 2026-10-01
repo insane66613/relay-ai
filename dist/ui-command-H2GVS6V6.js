@@ -41,7 +41,7 @@ import {
   supportsClaudeTransparentMode,
   updateCustomEndpointProvider,
   writeSecureLogLine
-} from "./chunk-GHCYAYAP.js";
+} from "./chunk-TBK4KCV3.js";
 import {
   init_provider_templates,
   listAddableTemplates,
@@ -95,7 +95,7 @@ import {
   setServerMaskGatewayIds,
   supportsManualModels,
   validateCustomEndpointUrl
-} from "./chunk-HX4DBJ7D.js";
+} from "./chunk-RWT7S5MM.js";
 import {
   __toCommonJS
 } from "./chunk-JIDIH7DS.js";
@@ -867,7 +867,7 @@ async function handleManualModel(req, res, action) {
     return;
   }
   try {
-    const { addManualModel, removeManualModel } = await import("./manual-models-5LABA6Z4.js");
+    const { addManualModel, removeManualModel } = await import("./manual-models-J7OXU57O.js");
     const result = action === "add" ? await addManualModel({
       providerId: providerId.trim(),
       modelId: modelId.trim(),
@@ -1896,4 +1896,4 @@ export {
   resolveUiShutdownDecision,
   runUiCommand
 };
-//# sourceMappingURL=ui-command-KXFRWSKJ.js.map
+//# sourceMappingURL=ui-command-H2GVS6V6.js.map

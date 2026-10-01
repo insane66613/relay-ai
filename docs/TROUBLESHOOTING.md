@@ -81,6 +81,27 @@ In mid-September 2026, OpenCode updated their Zen API gateway to block third-par
 
 ---
 
+## ClinePass: `403 ... only available via Cline product surfaces`
+
+Cline's free-tier models (the `cline-free/*` entries in the ClinePass catalog) cannot be called from third-party tools — Cline restricts them to its own IDE extension and CLI. Current Relay builds probe the free bucket when the provider is added and on every model refresh, and hide the models that answer with this rejection, so they cannot be selected. On an older Relay build that still lists one, selecting it returns:
+
+```text
+API Error: 403 Error 403: cline-free/deepseek-v4.1-flash is only available via Cline product surfaces.
+If you are using an old version of Cline, please update to the latest version
+```
+
+### Cause
+
+Cline's documentation states that free model usage is **not supported through the Cline API** — free models are only available in the Cline IDE extension and CLI ([Cline Free Models](https://docs.cline.bot/getting-started/free-models)). Cline's gateway identifies official Cline clients by their request headers and rejects other callers for these models.
+
+### Solutions
+
+1. **Update Relay and refresh the provider**: run `relay-ai providers refresh cline-pass` (or the ↻ Refresh models option in a picker). The probe re-runs and drops the gated free models from every list.
+2. **Use the paid ClinePass catalog**: `cline-pass/*` subscription models are unaffected and work normally — all of them passed the live test matrix in [Issue #80](https://github.com/jacob-bd/relay-ai/issues/80).
+3. **Use Cline's own app for free models**: install the Cline IDE extension or CLI and sign in with the same account.
+
+---
+
 ## Provider works in `relay-ai models` but not in `providers list`
 
 Zen and Go are **cloud builtins**: they appear when you have an OpenCode API key, even if they aren’t saved in `~/.relay-ai/providers.json`. `relay-ai providers list` shows them with `· cloud builtin`. Imported BYOK providers (Anthropic, Nvidia, Groq, …) come from the registry file.

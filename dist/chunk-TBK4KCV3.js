@@ -10,6 +10,7 @@ import {
   CLAUDE_CODE_USER_AGENT,
   CLINE_PASS_CATALOG_URL,
   CLINE_PASS_LEGACY_DEFAULT_CONTEXT_WINDOW,
+  CLINE_PASS_SDK_BASE_URL,
   CLINE_PASS_VALIDATION_URL,
   EFFORT_RANK,
   GLOBAL_OPENCODE_KEYRING_ACCOUNT,
@@ -39,6 +40,7 @@ import {
   fetchModelsDevCache,
   findModelsDevModel,
   forceRefreshProviderCredential,
+  formatClineRuntimeCredential,
   formatUpstreamError,
   generateAnthropicResponse,
   generateCliUserID,
@@ -112,7 +114,7 @@ import {
   translateRequest,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-HX4DBJ7D.js";
+} from "./chunk-RWT7S5MM.js";
 
 // src/registry/google-model-id.ts
 var GOOGLE_MODEL_PREFIX = "models/";
@@ -4953,8 +4955,67 @@ async function updateCustomEndpointProvider(input) {
   };
 }
 
+// src/registry/probe-models.ts
+var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function filterModelsByAvailability(models, spec) {
+  const targets = [];
+  models.forEach((model, index) => {
+    if (!spec.select || spec.select(model)) targets.push({ model, index });
+  });
+  if (targets.length === 0) return { models, removedIds: [], aborted: false };
+  const concurrency = Math.max(1, Math.min(spec.concurrency ?? 1, targets.length));
+  const gapMs = Math.max(0, spec.gapMs ?? 0);
+  const removedIndexes = /* @__PURE__ */ new Set();
+  let next = 0;
+  let started = 0;
+  let aborted = false;
+  let abortDetail;
+  const run3 = async () => {
+    while (!aborted) {
+      const slot = targets[next++];
+      if (!slot) return;
+      if (gapMs > 0 && started++ > 0) await sleep(gapMs);
+      let classification;
+      let status = 0;
+      try {
+        const response = await spec.probe(slot.model);
+        status = response.status;
+        classification = spec.classify(response.status, response.body);
+      } catch {
+        classification = "unknown";
+      }
+      const verdict = typeof classification === "string" ? classification : classification.verdict;
+      const detail = typeof classification === "string" ? void 0 : classification.detail;
+      spec.trace?.(`[probe:${spec.label}] ${slot.model.id} -> ${verdict} (HTTP ${status})${detail ? ` ${detail}` : ""}`);
+      if (verdict === "abort") {
+        aborted = true;
+        abortDetail = detail ?? `account-level rejection on ${slot.model.id}`;
+        return;
+      }
+      if (verdict === "unavailable") removedIndexes.add(slot.index);
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, run3));
+  if (aborted) {
+    spec.trace?.(`[probe:${spec.label}] aborted (${abortDetail}) \u2014 catalog kept unchanged`);
+    return { models, removedIds: [], aborted: true, abortDetail };
+  }
+  const removedIds = [...removedIndexes].sort((a, b) => a - b).map((index) => models[index].id);
+  if (removedIds.length > 0) {
+    spec.trace?.(`[probe:${spec.label}] removed ${removedIds.length} of ${targets.length}: ${removedIds.join(", ")}`);
+  }
+  return {
+    models: models.filter((_, index) => !removedIndexes.has(index)),
+    removedIds,
+    aborted: false
+  };
+}
+
 // src/registry/fetch-cline-pass-models.ts
 var REQUEST_TIMEOUT_MS = 1e4;
+var PROBE_TIMEOUT_MS = 2e4;
+var PROBE_GAP_MS = 400;
+var CLINE_PRODUCT_SURFACES_MARKER = "only available via cline product surfaces";
 function trace(message) {
   if (process.env.RELAY_AI_TRACE !== "1") return;
   writeSecureLogLine(
@@ -5045,7 +5106,71 @@ async function fetchJson(url, headers) {
     clearTimeout(timer);
   }
 }
-async function fetchClinePassModels() {
+function bodyErrorText(body) {
+  if (typeof body === "string") return body;
+  if (!body || typeof body !== "object") return "";
+  const error = body.error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const nested = error.message;
+    if (typeof nested === "string") return nested;
+  }
+  const message = body.message;
+  return typeof message === "string" ? message : "";
+}
+function classifyClineProbeResponse(status, body) {
+  const message = bodyErrorText(body).toLowerCase();
+  if (status === 403 && message.includes(CLINE_PRODUCT_SURFACES_MARKER)) return "unavailable";
+  if (status === 401 || status === 402) return "abort";
+  if (status === 403 && message.includes("subscription")) return "abort";
+  if (status === 403 || status === 429) return "unknown";
+  if (status < 200 || status >= 500) return "unknown";
+  return "available";
+}
+function buildClineFreeProbe(options) {
+  const runtimeCredential = formatClineRuntimeCredential(
+    "cline-pass",
+    options.authType,
+    options.credential.trim()
+  );
+  return {
+    label: "cline-free",
+    select: (model) => model.isFree === true,
+    concurrency: 1,
+    gapMs: PROBE_GAP_MS,
+    trace,
+    classify: classifyClineProbeResponse,
+    probe: async (model) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+      try {
+        const response = await fetch(`${CLINE_PASS_SDK_BASE_URL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // Same identification headers the provider template sends on inference.
+            "HTTP-Referer": "https://cline.bot",
+            "X-Title": "Cline",
+            Authorization: `Bearer ${runtimeCredential}`
+          },
+          body: JSON.stringify({
+            model: model.upstreamModelId,
+            max_tokens: 1,
+            messages: [{ role: "user", content: "hi" }]
+          }),
+          signal: controller.signal
+        });
+        const body = await response.json().catch(() => null);
+        return { status: response.status, body };
+      } catch {
+        return { status: 0, body: null };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+}
+async function fetchClinePassModels(probe) {
   const response = await fetchJson(CLINE_PASS_CATALOG_URL);
   if (!response.ok) {
     const body = await responseBodyPreview(response);
@@ -5056,7 +5181,15 @@ async function fetchClinePassModels() {
   const models = parseClinePassModels(payload);
   trace(`ClinePass catalog parsed models=${models.length}`);
   if (models.length === 0) throw new Error("ClinePass catalog returned no usable models.");
-  return models;
+  if (!probe?.credential.trim()) {
+    trace("ClinePass free probe skipped \u2014 no credential available");
+    return models;
+  }
+  const outcome = await filterModelsByAvailability(models, buildClineFreeProbe(probe));
+  if (outcome.aborted) {
+    trace(`ClinePass free probe paused (${outcome.abortDetail ?? "account-level rejection"}) \u2014 no models removed.`);
+  }
+  return outcome.models.length > 0 ? outcome.models : models;
 }
 async function validateClinePassApiKey(apiKey) {
   const response = await fetchJson(CLINE_PASS_VALIDATION_URL, {
@@ -5075,7 +5208,7 @@ async function validateClinePassApiKey(apiKey) {
 // src/registry/fetch-commandcode-models.ts
 var COMMANDCODE_BASE_URL = "https://api.commandcode.ai/provider/v1";
 var REQUEST_TIMEOUT_MS2 = 1e4;
-var PROBE_TIMEOUT_MS = 25e3;
+var PROBE_TIMEOUT_MS2 = 25e3;
 var PROBE_CONCURRENCY = 6;
 function isAnthropicSchemaModel(id) {
   return id.startsWith("claude-");
@@ -5128,7 +5261,7 @@ function classifyProbeResponse(status, body) {
 async function probeModel(model, baseUrl, apiKey) {
   const anthropicSchema = model.modelFormat === "anthropic";
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS2);
   try {
     const response = await fetch(`${baseUrl}/${anthropicSchema ? "messages" : "chat/completions"}`, {
       method: "POST",
@@ -5144,27 +5277,25 @@ async function probeModel(model, baseUrl, apiKey) {
       signal: controller.signal
     });
     const payload = await response.json().catch(() => null);
-    return classifyProbeResponse(response.status, payload);
+    return { status: response.status, body: payload };
   } catch {
-    return "unknown";
+    return { status: 0, body: null };
   } finally {
     clearTimeout(timer);
   }
 }
 async function filterModelsByPlan(models, baseUrl, apiKey) {
   if (!apiKey.trim()) return models;
-  const keep = [];
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(PROBE_CONCURRENCY, models.length) }, async () => {
-      for (let i = next++; i < models.length; i = next++) {
-        const model = models[i];
-        if (await probeModel(model, baseUrl, apiKey) !== "not-in-plan") keep.push(model);
-      }
-    })
-  );
-  const order = new Map(models.map((m, i) => [m.id, i]));
-  return keep.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  const outcome = await filterModelsByAvailability(models, {
+    label: "commandcode-plan",
+    concurrency: PROBE_CONCURRENCY,
+    classify: (status, body) => {
+      const result = classifyProbeResponse(status, body);
+      return result === "not-in-plan" ? "unavailable" : result;
+    },
+    probe: (model) => probeModel(model, baseUrl, apiKey)
+  });
+  return outcome.models;
 }
 async function fetchCommandCodeModels(baseUrl = COMMANDCODE_BASE_URL, apiKey) {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
@@ -5726,7 +5857,9 @@ async function refreshProviderModels(providerId, apiKey, registry = loadRegistry
       }
     } else if (source === "cline-recommended") {
       try {
-        models = await fetchClinePassModels();
+        models = await fetchClinePassModels(
+          apiKey?.trim() ? { credential: apiKey.trim(), authType: provider.authType === "oauth" ? "oauth" : "api" } : void 0
+        );
         baseUrl = provider.api.url ?? "https://api.cline.bot/api/v1";
       } catch (err) {
         if (cachedModelCount(provider) > 0) {
@@ -7770,7 +7903,7 @@ async function addProviderFromTemplate(template, apiKey, opts) {
     try {
       await validateClinePassApiKey(trimmedKey);
       fetched = {
-        models: await fetchClinePassModels(),
+        models: await fetchClinePassModels({ credential: trimmedKey, authType: "api" }),
         baseUrl: template.defaultBaseUrl ?? ""
       };
     } catch (err) {
@@ -8440,14 +8573,14 @@ function pidIsAlive(pid) {
     return err.code === "EPERM";
   }
 }
-function sleep(ms) {
+function sleep2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function waitForOriginalCodexPids(originalPids, timeoutMs, alive = pidIsAlive) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (originalPids.every((pid) => !alive(pid))) return true;
-    await sleep(200);
+    await sleep2(200);
   }
   return originalPids.every((pid) => !alive(pid));
 }
@@ -8460,7 +8593,7 @@ async function waitForCodexAppQuit(timeoutMs = 5e3) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isCodexAppRunning()) return true;
-    await sleep(200);
+    await sleep2(200);
   }
   return !isCodexAppRunning();
 }
@@ -8760,7 +8893,7 @@ function isClaudeAppRunning() {
   if (process.platform === "linux") return linuxMatchingPids2().length > 0;
   return false;
 }
-function sleep2(ms) {
+function sleep3(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function waitForQuit(timeoutMs) {
@@ -8773,7 +8906,7 @@ async function waitForQuit(timeoutMs) {
     } else if (!darwinIsRunning2()) {
       return true;
     }
-    await sleep2(200);
+    await sleep3(200);
   }
   if (process.platform === "win32") return winMatchingPids2().length === 0;
   if (process.platform === "linux") return linuxMatchingPids2().length === 0;
@@ -9022,4 +9155,4 @@ export {
   supportsClaudeTransparentMode,
   buildHttpProxyRoutes
 };
-//# sourceMappingURL=chunk-GHCYAYAP.js.map
+//# sourceMappingURL=chunk-TBK4KCV3.js.map

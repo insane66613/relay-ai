@@ -87,7 +87,7 @@ export async function addProviderFromTemplate(
     try {
       await validateClinePassApiKey(trimmedKey);
       fetched = {
-        models: await fetchClinePassModels(),
+        models: await fetchClinePassModels({ credential: trimmedKey, authType: 'api' }),
         baseUrl: template.defaultBaseUrl ?? '',
       };
     } catch (err) {

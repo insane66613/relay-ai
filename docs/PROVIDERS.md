@@ -128,6 +128,7 @@ Relay's API Server because it is commonly used as a coding/agent bridge.
 - **Usage and billing**: Both authentication methods use the ClinePass account and its subscription limits. Relay does not create a separate pay-as-you-go account or bill.
 - **Endpoint**: `https://api.cline.bot/api/v1`
 - **Model IDs**: Relay refreshes ClinePass's live catalog and preserves full IDs such as `cline-pass/qwen3.8-max`.
+- **Free-model gating**: Cline restricts its free-bucket models to the Cline IDE extension and CLI. On provider setup and every model refresh, Relay probes just the free-bucket models with the account credential and hides the ones Cline refuses with the "only available via Cline product surfaces" rejection; ambiguous probe failures keep the model listed, and an account-level rejection pauses the pass without removing anything.
 - **Credential isolation**: API keys and OAuth tokens use separate keychain entries. Switching methods replaces the old credential only after the new one is saved.
 - **Troubleshooting**: If validation fails, the wizard shows the provider's error and confirms that no registry entry was saved. Add `--trace` to write a redacted diagnostic log under `~/.relay-ai/logs/`.
 

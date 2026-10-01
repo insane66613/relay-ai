@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.6] - 2026-10-01
+
+### Added
+
+- **Model-availability probing now runs on a shared runner any provider can plug into.** `registry/probe-models.ts` owns the "send one minimal request per candidate model, classify the answer" flow: a provider supplies which models to probe, the request itself, and a classifier, while the runner handles pacing, abort semantics, and never shrinking a catalog on transient errors. Command Code's plan gating moved onto it unchanged, and ClinePass's free-model check is the second consumer — future providers that gate models by plan or client identity plug their classifier in the same way.
+
+### Changed
+
+- **Command Code plan probing now runs on the shared runner.** No behavior change: only an explicit `MODEL_NOT_IN_PLAN` rejection removes a model, every ambiguous failure (outages, rate limits, other 403s, network errors) keeps it listed, and a pass can never return an empty catalog.
+
+### Fixed
+
+- **Cline's free-tier models that are restricted to the Cline IDE/CLI no longer appear as selectable ClinePass models.** Cline answers external callers for them with `403 ... only available via Cline product surfaces` (their docs: free models are only available in the Cline IDE extension and CLI). Relay now probes the free bucket on provider setup and every model refresh — one request at a time with the account credential — and hides only the models that come back with that explicit rejection. Rate limits, outages, network failures and other 403s keep the model listed, and an account-level rejection (no subscription / rejected credential) pauses the whole pass without removing anything. Because the check runs on every add and refresh, a rotating free lineup re-evaluates itself without a Relay update. ([Issue #80](https://github.com/jacob-bd/relay-ai/issues/80))
+
 ## [0.15.5] - 2026-09-30
 
 ### Fixed

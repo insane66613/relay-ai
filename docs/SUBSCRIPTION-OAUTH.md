@@ -43,6 +43,8 @@ ClinePass is the one subscription provider that supports both modes. In the CLI,
 
 Both methods use the ClinePass account and subscription limits; Relay does not create separate pay-as-you-go billing. If API-key setup fails, the wizard displays the error and does not save the provider.
 
+Cline restricts its free-tier models to the Cline IDE extension and CLI. Relay probes the free bucket on setup and every model refresh and hides the models that answer with Cline's "only available via Cline product surfaces" rejection; see [docs/PROVIDERS.md](PROVIDERS.md) for the full behavior.
+
 ## GitHub Copilot plans and models
 
 After GitHub Copilot sign-in, Relay AI checks the account's Copilot access level and stores only a small, non-secret plan summary alongside the credential. It does not expose the GitHub login or raw plan identifier in the web UI.

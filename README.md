@@ -43,7 +43,7 @@ Pick your backend:
 
 **A note on providers:** relay-ai keeps your provider list in `~/.relay-ai/providers.json`. Add providers with API keys or device-code OAuth (`relay-ai providers add` / the UI). OpenCode Zen / Go are normal cloud providers (API key from [opencode.ai/auth](https://opencode.ai/auth)). Optional: `relay-ai providers import` once if you already use the OpenCode CLI — OpenCode is never required to run Relay.
 
-**ClinePass:** The CLI and UI expose API-key and Cline account OAuth as two authentication choices for one `ClinePass` provider entry. Both use the ClinePass account's subscription limits.
+**ClinePass:** The CLI and UI expose API-key and Cline account OAuth as two authentication choices for one `ClinePass` provider entry. Both use the ClinePass account's subscription limits. Cline restricts its free-tier models to the Cline IDE extension and CLI, so Relay probes the free bucket on setup and every model refresh and hides the ones Cline refuses — the picker only shows models your account can actually call.
 
 ## Installation
 

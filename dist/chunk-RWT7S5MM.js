@@ -7,7 +7,7 @@ import { join } from "path";
 // package.json
 var package_default = {
   name: "@jacobbd/relay-ai",
-  version: "0.15.5",
+  version: "0.15.6",
   publishConfig: {
     access: "public"
   },
@@ -6842,9 +6842,11 @@ export {
   injectClaudeCodeBillingSystemLine,
   selectBetaFlags,
   injectClaudeIdentity,
+  CLINE_PASS_SDK_BASE_URL,
   CLINE_PASS_CATALOG_URL,
   CLINE_PASS_VALIDATION_URL,
   CLINE_PASS_LEGACY_DEFAULT_CONTEXT_WINDOW,
+  formatClineRuntimeCredential,
   modelPrefersResponsesApi,
   isSdkMigratedNpm,
   maxToolsForNpm,
@@ -6925,4 +6927,4 @@ export {
   streamAnthropicResponse,
   generateAnthropicResponse
 };
-//# sourceMappingURL=chunk-HX4DBJ7D.js.map
+//# sourceMappingURL=chunk-RWT7S5MM.js.map

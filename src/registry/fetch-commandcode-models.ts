@@ -1,6 +1,7 @@
 // src/registry/fetch-commandcode-models.ts — Command Code Provider API catalog
 
 import { deriveBrand } from '../models.js';
+import { filterModelsByAvailability, type ProbeResponse, type ProbeVerdict } from './probe-models.js';
 import type { CachedModel } from './types.js';
 
 export const COMMANDCODE_BASE_URL = 'https://api.commandcode.ai/provider/v1';
@@ -105,7 +106,7 @@ async function probeModel(
   model: CachedModel,
   baseUrl: string,
   apiKey: string,
-): Promise<ProbeResult> {
+): Promise<ProbeResponse> {
   const anthropicSchema = model.modelFormat === 'anthropic';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -126,9 +127,9 @@ async function probeModel(
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => null);
-    return classifyProbeResponse(response.status, payload);
+    return { status: response.status, body: payload };
   } catch {
-    return 'unknown';
+    return { status: 0, body: null };
   } finally {
     clearTimeout(timer);
   }
@@ -141,18 +142,16 @@ export async function filterModelsByPlan(
   apiKey: string,
 ): Promise<CachedModel[]> {
   if (!apiKey.trim()) return models;
-  const keep: CachedModel[] = [];
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(PROBE_CONCURRENCY, models.length) }, async () => {
-      for (let i = next++; i < models.length; i = next++) {
-        const model = models[i]!;
-        if (await probeModel(model, baseUrl, apiKey) !== 'not-in-plan') keep.push(model);
-      }
-    }),
-  );
-  const order = new Map(models.map((m, i) => [m.id, i]));
-  return keep.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  const outcome = await filterModelsByAvailability(models, {
+    label: 'commandcode-plan',
+    concurrency: PROBE_CONCURRENCY,
+    classify: (status, body): ProbeVerdict => {
+      const result = classifyProbeResponse(status, body);
+      return result === 'not-in-plan' ? 'unavailable' : result;
+    },
+    probe: model => probeModel(model, baseUrl, apiKey),
+  });
+  return outcome.models;
 }
 
 export async function fetchCommandCodeModels(

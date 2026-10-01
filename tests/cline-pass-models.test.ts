@@ -10,6 +10,7 @@ import {
   CLINE_PASS_VALIDATION_URL,
 } from '../src/cline-pass.js';
 import {
+  classifyClineProbeResponse,
   fetchClinePassModels,
   parseClinePassModels,
   validateClinePassApiKey,
@@ -127,5 +128,107 @@ describe('ClinePass model catalog', () => {
     expect(trace).toContain('Invalid API key');
     expect(trace).not.toContain('secret-cline-api-key');
     rmSync(home, { recursive: true, force: true });
+  });
+
+  it('classifies free-model probe verdicts', () => {
+    expect(classifyClineProbeResponse(403, {
+      error: {
+        message: 'Error 403: cline-free/deepseek-v4.1-flash is only available via Cline product '
+          + 'surfaces. If you are using an old version of Cline, please update to the latest version',
+      },
+    })).toBe('unavailable');
+    expect(classifyClineProbeResponse(401, { error: 'Unauthorized' })).toBe('abort');
+    expect(classifyClineProbeResponse(402, { error: { message: 'Payment required' } })).toBe('abort');
+    expect(classifyClineProbeResponse(403, { error: { message: 'An active subscription is required' } })).toBe('abort');
+    expect(classifyClineProbeResponse(403, { error: { message: 'Forbidden' } })).toBe('unknown');
+    expect(classifyClineProbeResponse(429, { error: { message: 'Daily free limit reached' } })).toBe('unknown');
+    expect(classifyClineProbeResponse(500, {})).toBe('unknown');
+    expect(classifyClineProbeResponse(200, { choices: [] })).toBe('available');
+  });
+
+  it('drops only free models that answer with the product-surfaces rejection', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+      if (url === CLINE_PASS_CATALOG_URL) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            clinePass: [{ id: 'cline-pass/qwen3.8-max', name: 'Qwen 3.8 Max' }],
+            free: [
+              { id: 'cline-free/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+              { id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha' },
+            ],
+          }),
+        };
+      }
+      const probed = JSON.parse(init?.body ?? '{}').model as string;
+      if (probed === 'cline-free/deepseek-v4.1-flash') {
+        return {
+          ok: false,
+          status: 403,
+          json: async () => ({
+            error: { message: `Error 403: ${probed} is only available via Cline product surfaces.` },
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const models = await fetchClinePassModels({ credential: 'cline-api-key', authType: 'api' });
+
+    expect(models.map(model => model.id)).toEqual(['cline-pass/qwen3.8-max', 'stealth/space-bunny-alpha']);
+    const probedModels = fetchMock.mock.calls
+      .filter(([url]) => url === `${CLINE_PASS_SDK_BASE_URL}/chat/completions`)
+      .map(([, init]) => JSON.parse((init as { body: string }).body).model as string);
+    // Only free-bucket models are probed; the paid model is never touched.
+    expect(probedModels).toEqual(['cline-free/deepseek-v4.1-flash', 'stealth/space-bunny-alpha']);
+  });
+
+  it('pauses the probe pass on account-level rejections and keeps the whole catalog', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === CLINE_PASS_CATALOG_URL) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            clinePass: [{ id: 'cline-pass/qwen3.8-max', name: 'Qwen 3.8 Max' }],
+            free: [
+              { id: 'cline-free/one', name: 'One' },
+              { id: 'cline-free/two', name: 'Two' },
+            ],
+          }),
+        };
+      }
+      return { ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const models = await fetchClinePassModels({ credential: 'stale-token', authType: 'oauth' });
+
+    expect(models.map(model => model.id)).toEqual([
+      'cline-pass/qwen3.8-max',
+      'cline-free/one',
+      'cline-free/two',
+    ]);
+    const probeCalls = fetchMock.mock.calls
+      .filter(([url]) => url === `${CLINE_PASS_SDK_BASE_URL}/chat/completions`);
+    // The first account-level rejection pauses the pass; the second model is never probed.
+    expect(probeCalls).toHaveLength(1);
+    expect((probeCalls[0]![1] as { headers: Record<string, string> }).headers.Authorization)
+      .toBe('Bearer workos:stale-token');
+  });
+
+  it('skips probing when no credential is supplied', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ clinePass: [{ id: 'cline-pass/qwen3.8-max', name: 'Qwen 3.8 Max' }] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchClinePassModels();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
