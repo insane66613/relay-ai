@@ -213,17 +213,6 @@ export function breakRecursiveSchemaRefs(schema: unknown): unknown {
   return looped ? inlined : schema;
 }
 
-/**
- * npm package whose API validates tool schemas strictly: xAI refuses the whole
- * request when a tool's parameter ROOT is not an object type —
- * `[invalid_client_tool_schema] <tool>: tool parameter root must be an object
- * type (root schema is an anyOf/oneOf union with a non-object branch)` (HTTP
- * 400). The Codex/ChatGPT app ships MCP tools declared as root unions
- * (mcp__codex_app__automation_update and friends), and because tool defs ride
- * on every request, one such tool 400s every turn — including plain chat.
- */
-const XAI_NPM = '@ai-sdk/xai';
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -251,35 +240,51 @@ function resolveLocalDefRef(
   return isPlainObject(current) ? current : undefined;
 }
 
-/** String values a property schema allows via `const`/`enum` (references resolved). */
-function allowedStringValues(schema: unknown, defs: Record<string, unknown> | undefined): string[] | undefined {
+/** Scalar/enum values a property schema allows via `const`/`enum` (references resolved). */
+function allowedEnumValues(schema: unknown, defs: Record<string, unknown> | undefined): unknown[] | undefined {
   const resolved = resolveLocalDefRef(schema, defs);
   if (!resolved) return undefined;
-  if (Array.isArray(resolved.enum)) {
-    const values = resolved.enum.filter((entry): entry is string => typeof entry === 'string');
-    if (values.length > 0) return values;
-  }
-  if (typeof resolved.const === 'string') return [resolved.const];
+  if (Array.isArray(resolved.enum) && resolved.enum.length > 0) return resolved.enum;
+  if (resolved.const !== undefined) return [resolved.const];
   return undefined;
 }
 
 /**
- * Combine two definitions of one property. Sibling branches typically differ
- * only in a `mode`-style discriminator; unioning the allowed values keeps every
- * branch's choice valid instead of silently locking in the first one.
+ * Combine two definitions of one property.
+ * 1. If both are enums/consts, union the allowed values (preserving strings, numbers, etc.).
+ * 2. If both schemas are identical, return the first.
+ * 3. If conflicting/incompatible, wrap in `anyOf` inside the property schema (which is
+ *    valid JSON Schema accepted by Anthropic and other non-OpenAI engines).
  */
 function mergePropertySchemas(
   first: unknown,
   second: unknown,
   defs: Record<string, unknown> | undefined,
 ): unknown {
-  const firstValues = allowedStringValues(first, defs);
-  const secondValues = allowedStringValues(second, defs);
-  if (!firstValues || !secondValues) return first;
-  const union = [...new Set([...firstValues, ...secondValues])];
-  const base = { ...(resolveLocalDefRef(first, defs) ?? {}) };
-  delete base.const;
-  return { ...base, enum: union };
+  const firstValues = allowedEnumValues(first, defs);
+  const secondValues = allowedEnumValues(second, defs);
+  if (firstValues && secondValues) {
+    const seen = new Set<string>();
+    const union: unknown[] = [];
+    for (const val of [...firstValues, ...secondValues]) {
+      const key = JSON.stringify(val);
+      if (!seen.has(key)) {
+        seen.add(key);
+        union.push(val);
+      }
+    }
+    const base = { ...(resolveLocalDefRef(first, defs) ?? {}) };
+    delete base.const;
+    return { ...base, enum: union };
+  }
+  if (JSON.stringify(first) === JSON.stringify(second)) return first;
+
+  const firstResolved = resolveLocalDefRef(first, defs) ?? first;
+  const secondResolved = resolveLocalDefRef(second, defs) ?? second;
+  const existingBranches = isPlainObject(firstResolved) && Array.isArray(firstResolved.anyOf)
+    ? firstResolved.anyOf
+    : [firstResolved];
+  return { anyOf: [...existingBranches, secondResolved] };
 }
 
 /** Merge `source` properties into `target`, unioning conflicting discriminators. */
@@ -293,61 +298,179 @@ function mergeBranchProperties(
   }
 }
 
-/**
- * Collect the properties every object branch of a root union declares —
- * resolving `$ref` branches and recursing through nested unions (a mode branch
- * can itself be a union of shapes). Returns null when no branch carries an
- * object shape, so the caller can fall back to a permissive object.
- */
-function collectUnionBranchProperties(
+interface UnionCollectResult {
+  properties: Record<string, unknown>;
+  required: string[];
+  allBranchesFalseAdditionalProps: boolean;
+  hasExplicitFalseAdditionalProps: boolean;
+  sawObjectBranch: boolean;
+}
+
+function collectBranchInfo(
   branches: unknown[],
+  mode: 'union' | 'all',
   defs: Record<string, unknown> | undefined,
-): Record<string, unknown> | null {
+): UnionCollectResult {
   const properties: Record<string, unknown> = {};
   let sawObjectBranch = false;
+  let allBranchesFalseAdditionalProps = true;
+  let hasExplicitFalseAdditionalProps = false;
+  const branchRequiredSets: Set<string>[] = [];
+  const allOfRequiredSets: Set<string>[] = [];
+
   for (const branch of branches) {
     const resolved = resolveLocalDefRef(branch, defs);
     if (!resolved) continue;
-    const nested = Array.isArray(resolved.oneOf)
+
+    const nestedUnion = Array.isArray(resolved.oneOf)
       ? resolved.oneOf
       : Array.isArray(resolved.anyOf)
         ? resolved.anyOf
         : undefined;
-    if (nested) {
-      const inner = collectUnionBranchProperties(nested, defs);
-      if (inner) {
-        mergeBranchProperties(properties, inner, defs);
-        sawObjectBranch = true;
-      }
-      continue;
+    const nestedAll = Array.isArray(resolved.allOf) ? resolved.allOf : undefined;
+
+    let branchIsObject = resolved.type === 'object' || isPlainObject(resolved.properties);
+    const branchRequired = new Set<string>();
+
+    if (isPlainObject(resolved.properties)) {
+      mergeBranchProperties(properties, resolved.properties, defs);
+      sawObjectBranch = true;
     }
-    if (resolved.type !== 'object' && !isPlainObject(resolved.properties)) continue;
-    if (isPlainObject(resolved.properties)) mergeBranchProperties(properties, resolved.properties, defs);
-    sawObjectBranch = true;
+
+    if (resolved.additionalProperties === false) {
+      hasExplicitFalseAdditionalProps = true;
+    } else if (isPlainObject(resolved.properties) || (!nestedUnion && !nestedAll)) {
+      if (branchIsObject) allBranchesFalseAdditionalProps = false;
+    }
+
+    if (Array.isArray(resolved.required)) {
+      for (const k of resolved.required) {
+        if (typeof k === 'string') branchRequired.add(k);
+      }
+    }
+
+    if (nestedUnion) {
+      const inner = collectBranchInfo(nestedUnion, 'union', defs);
+      if (inner.sawObjectBranch) {
+        mergeBranchProperties(properties, inner.properties, defs);
+        sawObjectBranch = true;
+        branchIsObject = true;
+        if (inner.hasExplicitFalseAdditionalProps) hasExplicitFalseAdditionalProps = true;
+        if (!inner.allBranchesFalseAdditionalProps) allBranchesFalseAdditionalProps = false;
+        for (const r of inner.required) branchRequired.add(r);
+      }
+    }
+
+    if (nestedAll) {
+      const inner = collectBranchInfo(nestedAll, 'all', defs);
+      if (inner.sawObjectBranch) {
+        mergeBranchProperties(properties, inner.properties, defs);
+        sawObjectBranch = true;
+        branchIsObject = true;
+        if (inner.hasExplicitFalseAdditionalProps) hasExplicitFalseAdditionalProps = true;
+        if (!inner.allBranchesFalseAdditionalProps) allBranchesFalseAdditionalProps = false;
+        for (const r of inner.required) branchRequired.add(r);
+      }
+    }
+
+    if (branchIsObject) {
+      if (mode === 'all') allOfRequiredSets.push(branchRequired);
+      else branchRequiredSets.push(branchRequired);
+    }
   }
-  return sawObjectBranch ? properties : null;
+
+  let finalRequired: string[] = [];
+  if (mode === 'union') {
+    if (branchRequiredSets.length > 0) {
+      const [first, ...rest] = branchRequiredSets;
+      finalRequired = [...first!].filter(key => rest.every(s => s.has(key)));
+    }
+  } else {
+    const union = new Set<string>();
+    for (const set of allOfRequiredSets) {
+      for (const k of set) union.add(k);
+    }
+    finalRequired = [...union];
+  }
+
+  return {
+    properties,
+    required: finalRequired,
+    allBranchesFalseAdditionalProps: sawObjectBranch ? allBranchesFalseAdditionalProps : false,
+    hasExplicitFalseAdditionalProps,
+    sawObjectBranch,
+  };
 }
 
 /**
- * Rewrite a root-level `oneOf`/`anyOf` into a single object schema — the union
- * of every object branch's properties, `additionalProperties: true`, and no
- * `required` (it cannot be right for every branch). `$defs` is kept so the
- * remaining inner `$ref`s still resolve. A schema whose root carries no union
- * is returned untouched.
+ * Rewrite a root-level `oneOf`/`anyOf`/`allOf` into a single object schema:
+ * 1. Properties: union of every object branch's properties.
+ * 2. Required: intersection across `oneOf`/`anyOf` branches + union across `allOf` branches + root required.
+ * 3. AdditionalProperties: false if every object branch and root declared false; otherwise true.
+ * 4. Resolves local root `$ref`s to unions.
  */
 export function flattenRootUnionSchema(schema: unknown): unknown {
   if (!isPlainObject(schema)) return schema;
-  const root = schema;
-  const branches = Array.isArray(root.oneOf)
-    ? root.oneOf
-    : Array.isArray(root.anyOf)
-      ? root.anyOf
-      : undefined;
-  if (!branches) return root;
-  const defs = isPlainObject(root.$defs) ? root.$defs : undefined;
-  const merged: Record<string, unknown> = isPlainObject(root.properties) ? { ...root.properties } : {};
-  mergeBranchProperties(merged, collectUnionBranchProperties(branches, defs) ?? {}, defs);
-  const out: Record<string, unknown> = { type: 'object', properties: merged, additionalProperties: true };
+  const defs = isPlainObject(schema.$defs) ? schema.$defs : undefined;
+  let root = schema;
+  if (typeof root.$ref === 'string' && root.$ref.startsWith('#/$defs/')) {
+    const resolved = resolveLocalDefRef(root, defs);
+    if (resolved) root = { ...resolved, ...(defs ? { $defs: defs } : {}) };
+  }
+
+  const unionBranches = [
+    ...(Array.isArray(root.oneOf) ? root.oneOf : []),
+    ...(Array.isArray(root.anyOf) ? root.anyOf : []),
+  ];
+  const allBranches = Array.isArray(root.allOf) ? root.allOf : [];
+
+  if (unionBranches.length === 0 && allBranches.length === 0) return schema;
+
+  const mergedProperties: Record<string, unknown> = isPlainObject(root.properties)
+    ? { ...root.properties }
+    : {};
+  const requiredSet = new Set<string>();
+  if (Array.isArray(root.required)) {
+    for (const r of root.required) if (typeof r === 'string') requiredSet.add(r);
+  }
+
+  let sawObject = isPlainObject(root.properties);
+  const allowsAdditional = root.additionalProperties === true;
+  let hasExplicitFalse = root.additionalProperties === false;
+  let allBranchesClosed = root.additionalProperties === false || root.additionalProperties === undefined;
+
+  if (unionBranches.length > 0) {
+    const res = collectBranchInfo(unionBranches, 'union', defs);
+    if (res.sawObjectBranch) {
+      mergeBranchProperties(mergedProperties, res.properties, defs);
+      for (const r of res.required) requiredSet.add(r);
+      sawObject = true;
+      if (res.hasExplicitFalseAdditionalProps) hasExplicitFalse = true;
+      if (!res.allBranchesFalseAdditionalProps) allBranchesClosed = false;
+    }
+  }
+
+  if (allBranches.length > 0) {
+    const res = collectBranchInfo(allBranches, 'all', defs);
+    if (res.sawObjectBranch) {
+      mergeBranchProperties(mergedProperties, res.properties, defs);
+      for (const r of res.required) requiredSet.add(r);
+      sawObject = true;
+      if (res.hasExplicitFalseAdditionalProps) hasExplicitFalse = true;
+      if (!res.allBranchesFalseAdditionalProps) allBranchesClosed = false;
+    }
+  }
+
+  if (!sawObject) return schema;
+
+  const isClosed = hasExplicitFalse && allBranchesClosed && !allowsAdditional;
+
+  const out: Record<string, unknown> = {
+    type: 'object',
+    properties: mergedProperties,
+    additionalProperties: isClosed ? false : true,
+  };
+  if (requiredSet.size > 0) out.required = [...requiredSet];
   if (defs) out.$defs = defs;
   if (typeof root.description === 'string') out.description = root.description;
   return out;
@@ -356,7 +479,10 @@ export function flattenRootUnionSchema(schema: unknown): unknown {
 export function normalizeToolSchemaForNpm<T>(schema: T, npm: string | undefined): T {
   const acyclic = npm && RECURSION_SAFE_NPM.has(npm) ? schema : breakRecursiveSchemaRefs(schema) as T;
   const portable = rewriteNulPatternEscapes(acyclic) as T;
-  if (npm === XAI_NPM) return flattenRootUnionSchema(portable) as T;
-  if (!npm || !GOOGLE_NPM.has(npm)) return portable;
-  return fixGoogleArraySchemas(collapseSchemaUnionTypes(portable)) as T;
+  if (!npm || !RECURSION_SAFE_NPM.has(npm)) {
+    const flattened = flattenRootUnionSchema(portable) as T;
+    if (!npm || !GOOGLE_NPM.has(npm)) return flattened;
+    return fixGoogleArraySchemas(collapseSchemaUnionTypes(flattened)) as T;
+  }
+  return portable;
 }

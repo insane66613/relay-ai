@@ -2,7 +2,7 @@
 import {
   addManualModel,
   removeManualModel
-} from "./chunk-7OHT4O5H.js";
+} from "./chunk-Y2NUZFCS.js";
 import {
   CODEX_APP_AUTO_COMPACT_RATIO,
   CODEX_APP_PROVIDER_ID,
@@ -141,7 +141,7 @@ import {
   waitForCodexAppQuit,
   writeSecureLogLine,
   zenRegistryStub
-} from "./chunk-FZF5COIF.js";
+} from "./chunk-GHCYAYAP.js";
 import {
   filterTemplates,
   getTemplateById,
@@ -226,7 +226,7 @@ import {
   thinkingProviderOptions,
   upstreamHttpStatus,
   validateCustomEndpointUrl
-} from "./chunk-EU3BWRER.js";
+} from "./chunk-HX4DBJ7D.js";
 import "./chunk-JIDIH7DS.js";
 
 // src/cli.ts
@@ -3677,9 +3677,9 @@ function responsesRateLimitBody(modelId, message) {
 // src/codex/routing.ts
 import { randomBytes as randomBytes2 } from "crypto";
 function classifyCodexDispatch(modelId, relayRoutes, nativeModelIds) {
-  if (nativeModelIds.has(modelId)) return { kind: "native", modelId };
   const route = relayRoutes.find((candidate) => candidate.modelId === modelId);
   if (route) return { kind: "relay", route };
+  if (nativeModelIds.has(modelId)) return { kind: "native", modelId };
   return { kind: "unknown", modelId };
 }
 function classifyCodexMixedDispatch(input) {
@@ -6269,9 +6269,11 @@ function validateNativeCodexCatalog(value) {
   if (!value || typeof value !== "object" || !Array.isArray(value.models)) {
     throw new Error("Invalid native Codex catalog: expected a models array");
   }
-  const models = value.models;
-  if (models.length === 0) throw new Error("Invalid native Codex catalog: no models");
-  if (!models.every(isCatalogModel)) throw new Error("Invalid native Codex catalog: invalid model entry");
+  const rawModels = value.models;
+  if (rawModels.length === 0) throw new Error("Invalid native Codex catalog: no models");
+  if (!rawModels.every(isCatalogModel)) throw new Error("Invalid native Codex catalog: invalid model entry");
+  const models = rawModels.filter((m) => !m.slug.includes("__"));
+  if (models.length === 0) throw new Error("Invalid native Codex catalog: no native models");
   return { models };
 }
 async function captureNativeCodexCatalog(options) {
@@ -16387,7 +16389,7 @@ Options:
   --trace    Write debug logs under ~/.relay-ai/logs/`);
       return 0;
     }
-    const { runUiCommand } = await import("./ui-command-K5KS4B6G.js");
+    const { runUiCommand } = await import("./ui-command-KXFRWSKJ.js");
     return runUiCommand({ trace: parsed.trace, serverMode: parsed.uiServerMode });
   }
   if (parsed.command === "models") {

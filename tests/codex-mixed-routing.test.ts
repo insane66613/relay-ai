@@ -25,6 +25,11 @@ describe('mixed Codex routing', () => {
     expect(classifyCodexDispatch('kilo-auto/free', [relay], native)).toEqual({ kind: 'unknown', modelId: 'kilo-auto/free' });
   });
 
+  it('routes to relay even if nativeModelIds is contaminated with the relay slug', () => {
+    const contaminated = new Set(['gpt-5.5', 'kilo__kilo-auto/free']);
+    expect(classifyCodexDispatch('kilo__kilo-auto/free', [relay], contaminated)).toEqual({ kind: 'relay', route: relay });
+  });
+
   it('routes a marked Sub-agent to the configured Relay Sub-agent, whatever model it asks for', () => {
     const native = new Set(['gpt-5.5']);
     expect(classifyCodexMixedDispatch({

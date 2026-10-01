@@ -50,7 +50,7 @@ import { join as join2 } from "path";
 // package.json
 var package_default = {
   name: "@jacobbd/relay-ai",
-  version: "0.15.4",
+  version: "0.15.5",
   publishConfig: {
     access: "public"
   },
@@ -5303,7 +5303,6 @@ function breakRecursiveSchemaRefs(schema) {
   const inlined = walk(schema, /* @__PURE__ */ new Set());
   return looped ? inlined : schema;
 }
-var XAI_NPM = "@ai-sdk/xai";
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -5321,60 +5320,168 @@ function resolveLocalDefRef(value, defs) {
   }
   return isPlainObject(current) ? current : void 0;
 }
-function allowedStringValues(schema, defs) {
+function allowedEnumValues(schema, defs) {
   const resolved = resolveLocalDefRef(schema, defs);
   if (!resolved) return void 0;
-  if (Array.isArray(resolved.enum)) {
-    const values = resolved.enum.filter((entry) => typeof entry === "string");
-    if (values.length > 0) return values;
-  }
-  if (typeof resolved.const === "string") return [resolved.const];
+  if (Array.isArray(resolved.enum) && resolved.enum.length > 0) return resolved.enum;
+  if (resolved.const !== void 0) return [resolved.const];
   return void 0;
 }
 function mergePropertySchemas(first, second, defs) {
-  const firstValues = allowedStringValues(first, defs);
-  const secondValues = allowedStringValues(second, defs);
-  if (!firstValues || !secondValues) return first;
-  const union = [.../* @__PURE__ */ new Set([...firstValues, ...secondValues])];
-  const base = { ...resolveLocalDefRef(first, defs) ?? {} };
-  delete base.const;
-  return { ...base, enum: union };
+  const firstValues = allowedEnumValues(first, defs);
+  const secondValues = allowedEnumValues(second, defs);
+  if (firstValues && secondValues) {
+    const seen = /* @__PURE__ */ new Set();
+    const union = [];
+    for (const val of [...firstValues, ...secondValues]) {
+      const key = JSON.stringify(val);
+      if (!seen.has(key)) {
+        seen.add(key);
+        union.push(val);
+      }
+    }
+    const base = { ...resolveLocalDefRef(first, defs) ?? {} };
+    delete base.const;
+    return { ...base, enum: union };
+  }
+  if (JSON.stringify(first) === JSON.stringify(second)) return first;
+  const firstResolved = resolveLocalDefRef(first, defs) ?? first;
+  const secondResolved = resolveLocalDefRef(second, defs) ?? second;
+  const existingBranches = isPlainObject(firstResolved) && Array.isArray(firstResolved.anyOf) ? firstResolved.anyOf : [firstResolved];
+  return { anyOf: [...existingBranches, secondResolved] };
 }
 function mergeBranchProperties(target, source, defs) {
   for (const [key, value] of Object.entries(source)) {
     target[key] = key in target ? mergePropertySchemas(target[key], value, defs) : value;
   }
 }
-function collectUnionBranchProperties(branches, defs) {
+function collectBranchInfo(branches, mode, defs) {
   const properties = {};
   let sawObjectBranch = false;
+  let allBranchesFalseAdditionalProps = true;
+  let hasExplicitFalseAdditionalProps = false;
+  const branchRequiredSets = [];
+  const allOfRequiredSets = [];
   for (const branch of branches) {
     const resolved = resolveLocalDefRef(branch, defs);
     if (!resolved) continue;
-    const nested = Array.isArray(resolved.oneOf) ? resolved.oneOf : Array.isArray(resolved.anyOf) ? resolved.anyOf : void 0;
-    if (nested) {
-      const inner = collectUnionBranchProperties(nested, defs);
-      if (inner) {
-        mergeBranchProperties(properties, inner, defs);
-        sawObjectBranch = true;
-      }
-      continue;
+    const nestedUnion = Array.isArray(resolved.oneOf) ? resolved.oneOf : Array.isArray(resolved.anyOf) ? resolved.anyOf : void 0;
+    const nestedAll = Array.isArray(resolved.allOf) ? resolved.allOf : void 0;
+    let branchIsObject = resolved.type === "object" || isPlainObject(resolved.properties);
+    const branchRequired = /* @__PURE__ */ new Set();
+    if (isPlainObject(resolved.properties)) {
+      mergeBranchProperties(properties, resolved.properties, defs);
+      sawObjectBranch = true;
     }
-    if (resolved.type !== "object" && !isPlainObject(resolved.properties)) continue;
-    if (isPlainObject(resolved.properties)) mergeBranchProperties(properties, resolved.properties, defs);
-    sawObjectBranch = true;
+    if (resolved.additionalProperties === false) {
+      hasExplicitFalseAdditionalProps = true;
+    } else if (isPlainObject(resolved.properties) || !nestedUnion && !nestedAll) {
+      if (branchIsObject) allBranchesFalseAdditionalProps = false;
+    }
+    if (Array.isArray(resolved.required)) {
+      for (const k of resolved.required) {
+        if (typeof k === "string") branchRequired.add(k);
+      }
+    }
+    if (nestedUnion) {
+      const inner = collectBranchInfo(nestedUnion, "union", defs);
+      if (inner.sawObjectBranch) {
+        mergeBranchProperties(properties, inner.properties, defs);
+        sawObjectBranch = true;
+        branchIsObject = true;
+        if (inner.hasExplicitFalseAdditionalProps) hasExplicitFalseAdditionalProps = true;
+        if (!inner.allBranchesFalseAdditionalProps) allBranchesFalseAdditionalProps = false;
+        for (const r of inner.required) branchRequired.add(r);
+      }
+    }
+    if (nestedAll) {
+      const inner = collectBranchInfo(nestedAll, "all", defs);
+      if (inner.sawObjectBranch) {
+        mergeBranchProperties(properties, inner.properties, defs);
+        sawObjectBranch = true;
+        branchIsObject = true;
+        if (inner.hasExplicitFalseAdditionalProps) hasExplicitFalseAdditionalProps = true;
+        if (!inner.allBranchesFalseAdditionalProps) allBranchesFalseAdditionalProps = false;
+        for (const r of inner.required) branchRequired.add(r);
+      }
+    }
+    if (branchIsObject) {
+      if (mode === "all") allOfRequiredSets.push(branchRequired);
+      else branchRequiredSets.push(branchRequired);
+    }
   }
-  return sawObjectBranch ? properties : null;
+  let finalRequired = [];
+  if (mode === "union") {
+    if (branchRequiredSets.length > 0) {
+      const [first, ...rest] = branchRequiredSets;
+      finalRequired = [...first].filter((key) => rest.every((s) => s.has(key)));
+    }
+  } else {
+    const union = /* @__PURE__ */ new Set();
+    for (const set of allOfRequiredSets) {
+      for (const k of set) union.add(k);
+    }
+    finalRequired = [...union];
+  }
+  return {
+    properties,
+    required: finalRequired,
+    allBranchesFalseAdditionalProps: sawObjectBranch ? allBranchesFalseAdditionalProps : false,
+    hasExplicitFalseAdditionalProps,
+    sawObjectBranch
+  };
 }
 function flattenRootUnionSchema(schema) {
   if (!isPlainObject(schema)) return schema;
-  const root = schema;
-  const branches = Array.isArray(root.oneOf) ? root.oneOf : Array.isArray(root.anyOf) ? root.anyOf : void 0;
-  if (!branches) return root;
-  const defs = isPlainObject(root.$defs) ? root.$defs : void 0;
-  const merged = isPlainObject(root.properties) ? { ...root.properties } : {};
-  mergeBranchProperties(merged, collectUnionBranchProperties(branches, defs) ?? {}, defs);
-  const out = { type: "object", properties: merged, additionalProperties: true };
+  const defs = isPlainObject(schema.$defs) ? schema.$defs : void 0;
+  let root = schema;
+  if (typeof root.$ref === "string" && root.$ref.startsWith("#/$defs/")) {
+    const resolved = resolveLocalDefRef(root, defs);
+    if (resolved) root = { ...resolved, ...defs ? { $defs: defs } : {} };
+  }
+  const unionBranches = [
+    ...Array.isArray(root.oneOf) ? root.oneOf : [],
+    ...Array.isArray(root.anyOf) ? root.anyOf : []
+  ];
+  const allBranches = Array.isArray(root.allOf) ? root.allOf : [];
+  if (unionBranches.length === 0 && allBranches.length === 0) return schema;
+  const mergedProperties = isPlainObject(root.properties) ? { ...root.properties } : {};
+  const requiredSet = /* @__PURE__ */ new Set();
+  if (Array.isArray(root.required)) {
+    for (const r of root.required) if (typeof r === "string") requiredSet.add(r);
+  }
+  let sawObject = isPlainObject(root.properties);
+  const allowsAdditional = root.additionalProperties === true;
+  let hasExplicitFalse = root.additionalProperties === false;
+  let allBranchesClosed = root.additionalProperties === false || root.additionalProperties === void 0;
+  if (unionBranches.length > 0) {
+    const res = collectBranchInfo(unionBranches, "union", defs);
+    if (res.sawObjectBranch) {
+      mergeBranchProperties(mergedProperties, res.properties, defs);
+      for (const r of res.required) requiredSet.add(r);
+      sawObject = true;
+      if (res.hasExplicitFalseAdditionalProps) hasExplicitFalse = true;
+      if (!res.allBranchesFalseAdditionalProps) allBranchesClosed = false;
+    }
+  }
+  if (allBranches.length > 0) {
+    const res = collectBranchInfo(allBranches, "all", defs);
+    if (res.sawObjectBranch) {
+      mergeBranchProperties(mergedProperties, res.properties, defs);
+      for (const r of res.required) requiredSet.add(r);
+      sawObject = true;
+      if (res.hasExplicitFalseAdditionalProps) hasExplicitFalse = true;
+      if (!res.allBranchesFalseAdditionalProps) allBranchesClosed = false;
+    }
+  }
+  if (!sawObject) return schema;
+  const isClosed = hasExplicitFalse && allBranchesClosed && !allowsAdditional;
+  const out = {
+    type: "object",
+    properties: mergedProperties,
+    additionalProperties: isClosed ? false : true
+  };
+  if (requiredSet.size > 0) out.required = [...requiredSet];
   if (defs) out.$defs = defs;
   if (typeof root.description === "string") out.description = root.description;
   return out;
@@ -5382,9 +5489,12 @@ function flattenRootUnionSchema(schema) {
 function normalizeToolSchemaForNpm(schema, npm) {
   const acyclic = npm && RECURSION_SAFE_NPM.has(npm) ? schema : breakRecursiveSchemaRefs(schema);
   const portable = rewriteNulPatternEscapes(acyclic);
-  if (npm === XAI_NPM) return flattenRootUnionSchema(portable);
-  if (!npm || !GOOGLE_NPM.has(npm)) return portable;
-  return fixGoogleArraySchemas(collapseSchemaUnionTypes(portable));
+  if (!npm || !RECURSION_SAFE_NPM.has(npm)) {
+    const flattened = flattenRootUnionSchema(portable);
+    if (!npm || !GOOGLE_NPM.has(npm)) return flattened;
+    return fixGoogleArraySchemas(collapseSchemaUnionTypes(flattened));
+  }
+  return portable;
 }
 
 // src/core/model.ts

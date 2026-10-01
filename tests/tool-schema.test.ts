@@ -327,21 +327,25 @@ describe('flattenRootUnionSchema', () => {
     return tool.parameters;
   };
 
-  it('rewrites every captured union-root tool into an object schema on xAI routes', () => {
-    for (const tool of toolSchemas) {
-      const out = normalizeToolSchemaForNpm(tool.parameters, '@ai-sdk/xai') as any;
-      expect(out.type, tool.name).toBe('object');
-      expect(out.oneOf, tool.name).toBeUndefined();
-      expect(out.anyOf, tool.name).toBeUndefined();
-      expect(out.additionalProperties, tool.name).toBe(true);
-      expect(typeof out.properties, tool.name).toBe('object');
+  it('rewrites every captured union-root tool into an object schema on non-OpenAI routes', () => {
+    for (const npm of ['@ai-sdk/xai', '@ai-sdk/anthropic', '@ai-sdk/google-vertex/anthropic', '@openrouter/ai-sdk-provider', '@ai-sdk/amazon-bedrock']) {
+      for (const tool of toolSchemas) {
+        const out = normalizeToolSchemaForNpm(tool.parameters, npm) as any;
+        expect(out.type, `${npm}:${tool.name}`).toBe('object');
+        expect(out.oneOf, `${npm}:${tool.name}`).toBeUndefined();
+        expect(out.anyOf, `${npm}:${tool.name}`).toBeUndefined();
+        expect(out.allOf, `${npm}:${tool.name}`).toBeUndefined();
+        expect(typeof out.properties, `${npm}:${tool.name}`).toBe('object');
+      }
     }
   });
 
-  it('merges $ref branch properties and unions the automation_update mode discriminator', () => {
+  it('merges $ref branch properties, preserves mode in required, and keeps additionalProperties: false', () => {
     const parameters = parametersFor('automation_update');
-    const out = normalizeToolSchemaForNpm(parameters, '@ai-sdk/xai') as any;
+    const out = normalizeToolSchemaForNpm(parameters, '@ai-sdk/anthropic') as any;
     expect(out.$defs).toBe(parameters.$defs);
+    expect(out.required).toEqual(['mode']);
+    expect(out.additionalProperties).toBe(false);
     for (const key of ['id', 'mode', 'name', 'prompt', 'rrule', 'status', 'kind', 'targetThreadId', 'projectId', 'reasoningEffort', 'executionEnvironment']) {
       expect(out.properties[key], key).toBeDefined();
     }
@@ -351,16 +355,130 @@ describe('flattenRootUnionSchema', () => {
   it('unions conflicting enums on inline branches', () => {
     const out = normalizeToolSchemaForNpm(
       parametersFor('complete_conversational_onboarding_task'),
-      '@ai-sdk/xai',
+      '@ai-sdk/anthropic',
     ) as any;
     expect(out.properties.outcome.enum).toEqual(['completed', 'not_completed']);
     expect(out.properties.url).toBeDefined();
   });
 
-  it('leaves non-xAI routes and union-free roots untouched', () => {
+  it('wraps conflicting property types across branches in anyOf below the root', () => {
+    const conflicting = {
+      type: 'object',
+      oneOf: [
+        { type: 'object', properties: { target: { type: 'string' } } },
+        { type: 'object', properties: { target: { type: 'object', properties: { id: { type: 'string' } } } } },
+      ],
+    };
+    const out = normalizeToolSchemaForNpm(conflicting, '@ai-sdk/anthropic') as any;
+    expect(out.type).toBe('object');
+    expect(out.oneOf).toBeUndefined();
+    expect(out.properties.target).toEqual({
+      anyOf: [
+        { type: 'string' },
+        { type: 'object', properties: { id: { type: 'string' } } },
+      ],
+    });
+  });
+
+  it('unions numeric and boolean enums/consts across branches', () => {
+    const numericUnion = {
+      type: 'object',
+      oneOf: [
+        { type: 'object', properties: { code: { enum: [1, 2] } } },
+        { type: 'object', properties: { code: { const: 3 } } },
+      ],
+    };
+    const out = normalizeToolSchemaForNpm(numericUnion, '@ai-sdk/anthropic') as any;
+    expect(out.properties.code.enum).toEqual([1, 2, 3]);
+  });
+
+  it('resolves root $ref pointing to a union schema', () => {
+    const refUnion = {
+      $ref: '#/$defs/ToolUnion',
+      $defs: {
+        ToolUnion: {
+          oneOf: [
+            { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+            { type: 'object', properties: { a: { type: 'string' }, b: { type: 'number' } }, required: ['a', 'b'] },
+          ],
+        },
+      },
+    };
+    const out = normalizeToolSchemaForNpm(refUnion, '@ai-sdk/anthropic') as any;
+    expect(out.type).toBe('object');
+    expect(out.oneOf).toBeUndefined();
+    expect(out.required).toEqual(['a']);
+    expect(out.properties.a).toEqual({ type: 'string' });
+    expect(out.properties.b).toEqual({ type: 'number' });
+    expect(out.$defs).toBeDefined();
+  });
+
+  it('flattens root-level and nested allOf schemas and unions required fields', () => {
+    const allOfSchema = {
+      type: 'object',
+      required: ['rootField'],
+      properties: { common: { type: 'string' } },
+      allOf: [
+        { type: 'object', properties: { partA: { type: 'number' } }, required: ['partA'] },
+        { type: 'object', properties: { partB: { type: 'boolean' } }, required: ['partB'] },
+      ],
+    };
+    const out = normalizeToolSchemaForNpm(allOfSchema, '@ai-sdk/anthropic') as any;
+    expect(out.type).toBe('object');
+    expect(out.allOf).toBeUndefined();
+    expect(out.required).toEqual(expect.arrayContaining(['rootField', 'partA', 'partB']));
+    expect(out.properties.common).toEqual({ type: 'string' });
+    expect(out.properties.partA).toEqual({ type: 'number' });
+    expect(out.properties.partB).toEqual({ type: 'boolean' });
+  });
+
+  it('preserves required fields across nested union wrappers without collapsing to empty', () => {
+    const wrappedUnion = {
+      type: 'object',
+      oneOf: [
+        {
+          type: 'object',
+          oneOf: [
+            { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+            { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, required: ['id'] },
+          ],
+        },
+        {
+          type: 'object',
+          properties: { id: { type: 'string' }, role: { type: 'string' } },
+          required: ['id'],
+        },
+      ],
+    };
+    const out = normalizeToolSchemaForNpm(wrappedUnion, '@ai-sdk/anthropic') as any;
+    expect(out.type).toBe('object');
+    expect(out.required).toEqual(['id']);
+    expect(out.properties.id).toBeDefined();
+    expect(out.properties.name).toBeDefined();
+    expect(out.properties.role).toBeDefined();
+  });
+
+  it('keeps additionalProperties true when mixing open union and closed allOf branches', () => {
+    const mixedSchema = {
+      type: 'object',
+      oneOf: [
+        { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: true },
+      ],
+      allOf: [
+        { type: 'object', properties: { b: { type: 'string' } }, additionalProperties: false },
+      ],
+    };
+    const out = normalizeToolSchemaForNpm(mixedSchema, '@ai-sdk/anthropic') as any;
+    expect(out.type).toBe('object');
+    expect(out.additionalProperties).toBe(true);
+  });
+
+  it('leaves OpenAI and Azure routes and union-free roots untouched', () => {
     const transfer = parametersFor('transfer_voice_call');
     expect(normalizeToolSchemaForNpm(transfer, '@ai-sdk/openai')).toBe(transfer);
+    expect(normalizeToolSchemaForNpm(transfer, '@ai-sdk/azure')).toBe(transfer);
     const plain = { type: 'object', properties: { a: { type: 'string' } } };
+    expect(normalizeToolSchemaForNpm(plain, '@ai-sdk/anthropic')).toBe(plain);
     expect(normalizeToolSchemaForNpm(plain, '@ai-sdk/xai')).toBe(plain);
     expect(flattenRootUnionSchema(plain)).toBe(plain);
   });

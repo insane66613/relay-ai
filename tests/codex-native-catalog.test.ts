@@ -45,6 +45,17 @@ describe('native Codex catalog', () => {
     expect(snapshot.models[0]).toEqual(model);
   });
 
+  it('strips out contaminated Relay model slugs containing double underscores', () => {
+    const relayModel = {
+      ...model,
+      slug: 'claude-code__claude-haiku-4-5-20251001',
+      display_name: 'Claude Haiku · Claude Code',
+    };
+    const catalog = validateNativeCodexCatalog({ models: [model, relayModel] });
+    expect(catalog.models).toHaveLength(1);
+    expect(catalog.models[0].slug).toBe('gpt-5.5');
+  });
+
   it('rejects empty or malformed catalogs', () => {
     expect(() => validateNativeCodexCatalog({ models: [] })).toThrow(/no models/i);
     expect(() => validateNativeCodexCatalog({ models: [{ slug: 'bad' }] })).toThrow(/invalid/i);

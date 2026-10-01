@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.5] - 2026-09-30
+
+### Fixed
+
+- **Claude models in the Codex / ChatGPT desktop app no longer fail with `input_schema does not support oneOf, allOf, or anyOf at the top level`.** The Anthropic Messages API strictly requires tool parameters to have `type: 'object'` at the top level and rejects root `oneOf`/`anyOf`/`allOf` schemas with HTTP 400. Because the Codex desktop app injects tools on every turn (including `mcp__codex_app__automation_update` and related multi-variant schemas), turns on Claude models (e.g. Haiku 4.5, Sonnet 5.5, Opus 5) aborted before streaming started. Relay now flattens root-level unions into standard object schemas across all providers that forbid them (Anthropic, Vertex Anthropic, Bedrock, OpenRouter, Google, xAI), while preserving native schema fidelity for OpenAI and Azure.
+- **Root union flattening preserves required properties and discriminators accurately.** Flattening recursively resolves local `$defs` references, merges common properties, and computes the exact intersection of required fields across union branches without dropping keys when branches use nested wrappers. Discriminating fields (`const`/`enum`) across variants are unioned (supporting string, numeric, and boolean scalars), conflicting property types are wrapped in child `anyOf` definitions, and `additionalProperties: false` is strictly preserved when all branches are closed.
+- **Relay models in mixed Codex mode are no longer misrouted to OpenAI's native server.** In mixed mode, `classifyCodexDispatch` checked `nativeModelIds` before `relayRoutes`. If a prior or concurrent Codex App session left catalog entries in `~/.codex/config.toml`, `codex debug models` reported those Relay slugs back to the CLI, causing Relay to misclassify its own models (e.g. `claude-code__claude-haiku-4-5-20251001`) as native OpenAI models and forward them to ChatGPT's WebSocket, which rejected them with HTTP 400. Relay now prioritizes `relayRoutes` and sanitizes double-underscore Relay slugs from native catalog snapshots.
+
 ## [0.15.4] - 2026-09-29
 
 ### Added

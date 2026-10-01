@@ -32,10 +32,14 @@ export function validateNativeCodexCatalog(value: unknown): CodexCatalogFile {
   if (!value || typeof value !== 'object' || !Array.isArray((value as { models?: unknown }).models)) {
     throw new Error('Invalid native Codex catalog: expected a models array');
   }
-  const models = (value as { models: unknown[] }).models;
-  if (models.length === 0) throw new Error('Invalid native Codex catalog: no models');
-  if (!models.every(isCatalogModel)) throw new Error('Invalid native Codex catalog: invalid model entry');
-  return { models: models as CodexCatalogModel[] };
+  const rawModels = (value as { models: unknown[] }).models;
+  if (rawModels.length === 0) throw new Error('Invalid native Codex catalog: no models');
+  if (!rawModels.every(isCatalogModel)) throw new Error('Invalid native Codex catalog: invalid model entry');
+  // Strip any models injected from a previous Relay session overlay (slugs containing '__').
+  // Native OpenAI models never contain double underscores.
+  const models = (rawModels as CodexCatalogModel[]).filter(m => !m.slug.includes('__'));
+  if (models.length === 0) throw new Error('Invalid native Codex catalog: no native models');
+  return { models };
 }
 
 export async function captureNativeCodexCatalog(

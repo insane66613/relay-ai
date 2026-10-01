@@ -22,9 +22,9 @@ export function classifyCodexDispatch(
   relayRoutes: readonly CodexProxyRoute[],
   nativeModelIds: ReadonlySet<string>,
 ): CodexDispatch {
-  if (nativeModelIds.has(modelId)) return { kind: 'native', modelId };
   const route = relayRoutes.find(candidate => candidate.modelId === modelId);
   if (route) return { kind: 'relay', route };
+  if (nativeModelIds.has(modelId)) return { kind: 'native', modelId };
   return { kind: 'unknown', modelId };
 }
 
