@@ -66,6 +66,7 @@ export async function resolveFavorite(
       oauthAccountId: found.provider.oauthAccountId,
       providerData: found.provider.providerData,
       headers: found.provider.headers,
+      conversationHeader: found.provider.conversationHeader,
       refreshToken: providerRefreshToken(found.provider.id, found.provider.authType, found.provider.authRef),
     };
   }
