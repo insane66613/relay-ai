@@ -484,6 +484,13 @@ function antigravityConversationId(
 ): string | undefined {
   const explicit = extractConversationId(headers, parsed);
   if (explicit) return explicit;
+
+  const nestedRequest = parsed?.request;
+  if (nestedRequest && typeof nestedRequest === 'object') {
+    const nested = extractConversationId(undefined, nestedRequest);
+    if (nested) return nested;
+  }
+
   const requestId = typeof parsed?.requestId === 'string' ? parsed.requestId : '';
   const segments = requestId.split('/');
   if (segments.length >= 2 && segments[0] && segments[1]) return `${segments[0]}/${segments[1]}`;
