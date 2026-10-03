@@ -14,6 +14,7 @@ export interface ResolvedFavorite {
   oauthAccountId?: string;
   providerData?: Record<string, unknown>;
   headers?: Record<string, string>;
+  conversationHeader?: string;
   refreshToken?: () => Promise<string | null>;
 }
 
