@@ -568,6 +568,7 @@ describe('antigravity route resolution', () => {
         providerName: 'OpenCode Zen',
         model: { id: 'llama-3.1-8b', name: 'Llama 8B' },
         apiKey: 'key-1',
+        conversationHeader: 'x-session-id',
       },
       {
         providerId: 'groq',
