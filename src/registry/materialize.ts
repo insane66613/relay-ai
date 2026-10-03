@@ -156,6 +156,7 @@ function materializeOne(
     authRef: provider.authRef,
     authType: provider.authType,
     headers: provider.api.headers,
+    conversationHeader: provider.api.conversationHeader,
     models,
   };
 }
