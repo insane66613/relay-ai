@@ -212,6 +212,7 @@ export async function fetchTemplateModels(
   apiKey: string,
   baseUrlOverride?: string,
   extraHeaders?: Record<string, string>,
+  timeoutMs: number = TEST_TIMEOUT_MS,
 ): Promise<FetchTemplateModelsResult> {
   const trimmedOverride = baseUrlOverride?.trim();
   const baseUrl = (trimmedOverride || template.defaultBaseUrl)?.replace(/\/$/, '');
@@ -244,8 +245,11 @@ export async function fetchTemplateModels(
   }
 
   const url = modelsUrl(baseUrl, template);
+  const effectiveTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.min(120_000, Math.max(1_000, Math.round(timeoutMs)))
+    : TEST_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   const trimmedApiKey = apiKey.trim();
@@ -337,7 +341,9 @@ export async function fetchTemplateModels(
     return {
       models: [],
       baseUrl,
-      error: timedOut ? 'Connection timed out after 10 seconds.' : 'Could not reach the provider.',
+      error: timedOut
+        ? `Connection timed out after ${Math.round(effectiveTimeoutMs / 1000)} seconds.`
+        : 'Could not reach the provider.',
       hint: timedOut
         ? 'Check your network or try again.'
         : 'Verify the provider is online and your API key is correct.',

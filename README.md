@@ -172,6 +172,8 @@ relay-ai providers add      # pick a template or custom endpoint
 relay-ai providers import   # one-time migration from OpenCode (optional)
 ```
 
+Custom endpoint model discovery allows up to 30 seconds by default so local or cold-start gateways have time to return `/models`. Set `RELAY_AI_CUSTOM_ENDPOINT_MODEL_TIMEOUT_MS` to override the probe timeout (1,000–120,000 ms).
+
 On first `relay-ai claude` run with an empty registry, an inline wizard walks you through Quick start (Zen), import, or opening `relay-ai providers`.
 
 ### OpenCode API key (Zen/Go only)
