@@ -497,6 +497,20 @@ function antigravityConversationId(
   return undefined;
 }
 
+function conversationIdentityHeaders(
+  route: AntigravityRoute,
+  conversationId: string | undefined,
+): Record<string, string> | undefined {
+  const header = route.conversationHeader?.trim();
+  if (!header || !conversationId) return undefined;
+  try {
+    http.validateHeaderName(header);
+  } catch {
+    return undefined;
+  }
+  return { [header]: conversationId };
+}
+
 function shouldEchoReasoningForRoute(route: AntigravityRoute): boolean {
   if (route.npm !== '@ai-sdk/openai-compatible') return false;
   const routeIdentity = [
