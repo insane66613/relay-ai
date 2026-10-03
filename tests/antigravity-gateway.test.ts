@@ -699,6 +699,25 @@ describe('cloud-code-gateway', () => {
     });
   });
 
+  it('propagates a configured conversation header across user and helper requests', async () => {
+    vi.mocked(streamText).mockClear();
+    const route = { ...testRoutes[1]!, conversationHeader: 'x-session-id' };
+    const handle = await start([route]);
+
+    for (const requestId of ['agent/conversation-123/turn-1', 'checkpoint/helper-999']) {
+      const res = await postJson(handle, '/v1internal:streamGenerateContent?alt=sse', {
+        model: route.catalogId,
+        requestId,
+        request: {
+          sessionId: 'stable-session-456',
+          contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+        },
+      });
+      expect(res.status, await res.text()).toBe(200);
+      const call = vi.mocked(streamText).mock.calls.at(-1)![0] as any;
+      expect(call.headers).toMatchObject({ 'x-session-id': 'stable-session-456' });
+    }
+  });
   it('forwards Cloud Code Assist Cloud Code routes without the OpenAI-compatible SDK', async () => {
     vi.mocked(createLanguageModel).mockClear();
     const originalFetch = globalThis.fetch;
