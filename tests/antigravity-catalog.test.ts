@@ -589,6 +589,7 @@ describe('antigravity route resolution', () => {
       displayName: 'Llama 8B (Relay - OpenCode Zen)',
       npm: '@ai-sdk/openai-compatible',
       apiKey: 'key-1',
+      conversationHeader: 'x-session-id',
       baseURL: undefined,
       contextWindow: undefined,
     });
