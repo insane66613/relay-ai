@@ -14,6 +14,7 @@ export interface ResolvedFavorite {
   oauthAccountId?: string;
   providerData?: Record<string, unknown>;
   headers?: Record<string, string>;
+  conversationHeader?: string;
   refreshToken?: () => Promise<string | null>;
 }
 
@@ -65,6 +66,7 @@ export async function resolveFavorite(
       oauthAccountId: found.provider.oauthAccountId,
       providerData: found.provider.providerData,
       headers: found.provider.headers,
+      conversationHeader: found.provider.conversationHeader,
       refreshToken: providerRefreshToken(found.provider.id, found.provider.authType, found.provider.authRef),
     };
   }

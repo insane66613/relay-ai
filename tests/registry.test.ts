@@ -290,7 +290,7 @@ describe('materializeRegistry', () => {
       enabled: true,
       authRef: 'keyring:provider:openai',
       authType: 'oauth',
-      api: { npm: '@ai-sdk/openai' },
+      api: { npm: '@ai-sdk/openai', conversationHeader: 'x-session-id' },
       addedAt: '2026-06-09T00:00:00.000Z',
       modelsCache: {
         fetchedAt: '2026-06-09T00:00:00.000Z',
@@ -308,6 +308,7 @@ describe('materializeRegistry', () => {
     expect(locals[0]?.models[0]?.upstreamModelId).toBe('gpt-5.5');
     expect(locals[0]?.apiKey).toBe('sk-test');
     expect(locals[0]?.authType).toBe('oauth');
+    expect(locals[0]?.conversationHeader).toBe('x-session-id');
   });
 
   it('repairs a stale OpenCode Go cache entry from current model metadata', () => {

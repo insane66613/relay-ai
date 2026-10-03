@@ -276,12 +276,13 @@ export async function startCloudCodeGateway(
           if (trace) log(`[gateway]   provider options: ${JSON.stringify(baseProviderOptions ?? {})}`);
           const isStream = lowerUrl.includes('stream');
           const conversationKey = conversationKeyFromRequest(parsed);
+          const conversationId = antigravityConversationId(parsed, req.headers);
           const requestHeaders = openCodeGoHeaders(
             route.providerId,
             route.baseURL,
-            antigravityConversationId(parsed, req.headers),
+            conversationId,
             route.headers,
-          );
+          ) ?? conversationIdentityHeaders(route, conversationId);
           const requestOptions = {
             ...reasoningEchoOptionsForRoute(route, parsed, reasoningEchoesByConversation),
             ...(requestHeaders ? { requestHeaders } : {}),
@@ -484,10 +485,31 @@ function antigravityConversationId(
 ): string | undefined {
   const explicit = extractConversationId(headers, parsed);
   if (explicit) return explicit;
+
+  const nestedRequest = parsed?.request;
+  if (nestedRequest && typeof nestedRequest === 'object') {
+    const nested = extractConversationId(undefined, nestedRequest);
+    if (nested) return nested;
+  }
+
   const requestId = typeof parsed?.requestId === 'string' ? parsed.requestId : '';
   const segments = requestId.split('/');
   if (segments.length >= 2 && segments[0] && segments[1]) return `${segments[0]}/${segments[1]}`;
   return undefined;
+}
+
+function conversationIdentityHeaders(
+  route: AntigravityRoute,
+  conversationId: string | undefined,
+): Record<string, string> | undefined {
+  const header = route.conversationHeader?.trim();
+  if (!header || !conversationId) return undefined;
+  try {
+    http.validateHeaderName(header);
+  } catch {
+    return undefined;
+  }
+  return { [header]: conversationId };
 }
 
 function shouldEchoReasoningForRoute(route: AntigravityRoute): boolean {

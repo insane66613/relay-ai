@@ -58,6 +58,8 @@ export interface RegistryProvider {
     id?: string;
     /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
     headers?: Record<string, string>;
+    /** Optional per-request header used to propagate a stable client conversation identity. */
+    conversationHeader?: string;
   };
   modelsCache?: {
     fetchedAt: string;

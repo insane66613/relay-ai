@@ -406,6 +406,7 @@ export function buildAntigravityRoutes(
       ...(fav.oauthAccountId ? { oauthAccountId: fav.oauthAccountId } : {}),
       ...(fav.providerData ? { providerData: fav.providerData } : {}),
       ...(fav.headers ? { headers: fav.headers } : {}),
+      ...(fav.conversationHeader ? { conversationHeader: fav.conversationHeader } : {}),
       ...(fav.refreshToken ? { refreshToken: fav.refreshToken } : {}),
       baseURL,
       contextWindow,

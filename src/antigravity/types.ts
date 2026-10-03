@@ -19,6 +19,8 @@ export interface AntigravityRoute {
   oauthAccountId?: string;
   providerData?: Record<string, unknown>;
   headers?: Record<string, string>;
+  /** Header name that receives the stable Antigravity conversation identity. */
+  conversationHeader?: string;
   refreshToken?: () => Promise<string | null>;
   /** Provider base URL — never serialized into the catalog. */
   baseURL?: string;
