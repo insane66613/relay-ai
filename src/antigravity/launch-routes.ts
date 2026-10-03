@@ -40,6 +40,7 @@ export async function resolveAntigravityLaunchRoutes(
     oauthAccountId: opts.provider.oauthAccountId,
     providerData: opts.provider.providerData,
     headers: opts.provider.headers,
+    conversationHeader: opts.provider.conversationHeader,
     refreshToken: providerRefreshToken(opts.provider.id, opts.provider.authType, opts.provider.authRef),
   };
   const ctx: ResolveContext = {
