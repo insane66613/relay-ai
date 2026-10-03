@@ -290,7 +290,7 @@ describe('materializeRegistry', () => {
       enabled: true,
       authRef: 'keyring:provider:openai',
       authType: 'oauth',
-      api: { npm: '@ai-sdk/openai' },
+      api: { npm: '@ai-sdk/openai', conversationHeader: 'x-session-id' },
       addedAt: '2026-06-09T00:00:00.000Z',
       modelsCache: {
         fetchedAt: '2026-06-09T00:00:00.000Z',
