@@ -37,7 +37,11 @@ export async function fetchAnthropicModels(
       logTrace = makeTraceLogger(getProviderDebugLogPath());
     }
 
-    const rawBodyText = await response.text();
+    // Keep a known HTTP error even if its body breaks. Successful catalogs must
+    // still propagate body-read failures so stalled bodies report the timeout.
+    const rawBodyText = response.ok
+      ? await response.text()
+      : await response.text().catch(() => '');
     if (logTrace) {
       logTrace(`[fetchAnthropicModels] HTTP ${response.status} from ${modelsUrl}`);
       logTrace(`[fetchAnthropicModels] Body: ${rawBodyText}`);

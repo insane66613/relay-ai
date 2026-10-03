@@ -161,6 +161,41 @@ describe('endpoint discovery timeouts', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each(['openai', 'anthropic'] as const)('preserves %s HTTP errors when the error body resets', async kind => {
+    for (const status of [401, 403, 500]) {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: false, status,
+        text: async () => { throw new Error('connection reset by peer'); },
+      } as Response);
+      const result = kind === 'anthropic'
+        ? await fetchAnthropicModels('https://gateway.example', 'sk-real-key')
+        : await fetchTemplateModels(getTemplateById('groq')!, 'sk-real-key');
+      expect(result.error).toBe(status === 500
+        ? (kind === 'anthropic' ? 'Could not list models (HTTP 500).' : 'Provider returned HTTP 500.')
+        : 'API key was rejected.');
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
+  it.each(['openai', 'anthropic'] as const)('keeps cached %s models when a rejected key response body stalls', async kind => {
+    const entry = provider(`custom-${kind}`);
+    entry.modelsCache = { fetchedAt: 'old', models: [{ id: 'old-model', name: 'Old', upstreamModelId: 'old-model', modelFormat: kind }] };
+    const registry: ProviderRegistry = { schemaVersion: 1, providers: [entry] };
+    vi.mocked(io.loadRegistry).mockReturnValue(registry);
+    vi.mocked(fetch).mockImplementation(async (_url, init) => ({
+      ok: false, status: 401,
+      text: () => new Promise<string>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('transport stopped')), { once: true });
+      }),
+    } as Response));
+    const pending = refreshProviderModels(entry.id, 'sk-real-key', registry);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await pending).toMatchObject({ ok: true, skipped: true, modelCount: 1 });
+    expect(registry.providers[0]?.modelsCache?.models[0]?.id).toBe('old-model');
+    expect(io.saveRegistry).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('bounds bulk requests to three, resolves credentials serially, and preserves all caches', async () => {
     const entries = Array.from({ length: 7 }, (_, i) => provider('custom-openai', `custom-${i}`));
     entries[1]!.modelsCache = { fetchedAt: 'old', models: [{ id: 'old-model', name: 'Old', upstreamModelId: 'old-model', modelFormat: 'openai' }] };

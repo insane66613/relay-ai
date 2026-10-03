@@ -283,7 +283,9 @@ export async function fetchTemplateModels(
     }
 
     if (!response.ok) {
-      const body = await response.text();
+      // The HTTP status is already known; a broken error body must not turn
+      // a rejected key into a connection failure and lose cached-model fallback.
+      const body = await response.text().catch(() => '');
       if (logTrace) {
         logTrace(`[fetchTemplateModels] HTTP ${response.status} from ${url}`);
         logTrace(`[fetchTemplateModels] Body: ${body}`);
