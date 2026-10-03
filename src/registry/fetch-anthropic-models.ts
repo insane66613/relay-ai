@@ -4,18 +4,18 @@ import { deriveBrand } from '../models.js';
 import { resolveContextWindow } from '../context-window.js';
 import { makeTraceLogger, getProviderDebugLogPath } from '../trace-log.js';
 import type { CachedModel } from './types.js';
+import { clampModelTimeoutMs, endpointModelTimeoutMs } from './endpoint-timeout.js';
 
 export async function fetchAnthropicModels(
   baseUrl: string,
   apiKey: string,
   extraHeaders?: Record<string, string>,
-  timeoutMs: number = 10_000,
+  timeoutMs?: number,
 ): Promise<{ models: CachedModel[]; baseUrl: string; error?: string; hint?: string }> {
   const root = baseUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
   const modelsUrl = `${root}/v1/models`;
-  const effectiveTimeoutMs = Number.isFinite(timeoutMs)
-    ? Math.min(120_000, Math.max(1_000, Math.round(timeoutMs)))
-    : 10_000;
+  const defaultTimeoutMs = endpointModelTimeoutMs('anthropic', root);
+  const effectiveTimeoutMs = clampModelTimeoutMs(timeoutMs ?? defaultTimeoutMs, defaultTimeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
 
@@ -37,7 +37,7 @@ export async function fetchAnthropicModels(
       logTrace = makeTraceLogger(getProviderDebugLogPath());
     }
 
-    const rawBodyText = await response.text().catch(() => '');
+    const rawBodyText = await response.text();
     if (logTrace) {
       logTrace(`[fetchAnthropicModels] HTTP ${response.status} from ${modelsUrl}`);
       logTrace(`[fetchAnthropicModels] Body: ${rawBodyText}`);
@@ -82,9 +82,8 @@ export async function fetchAnthropicModels(
       error: `Could not list models (HTTP ${response.status}).`,
       hint: 'Verify the base URL supports Anthropic-compatible /v1/models or try the OpenAI-compatible option instead.',
     };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const timedOut = message.includes('abort') || message.includes('Abort');
+  } catch {
+    const timedOut = controller.signal.aborted;
     return {
       models: [],
       baseUrl: root,

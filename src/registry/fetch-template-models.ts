@@ -7,8 +7,7 @@ import { normalizeGoogleDisplayName, normalizeGoogleModelId } from './google-mod
 import type { CachedModel } from './types.js';
 import { makeTraceLogger, getProviderDebugLogPath } from '../trace-log.js';
 import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
-
-const TEST_TIMEOUT_MS = 10_000;
+import { clampModelTimeoutMs, endpointModelTimeoutMs } from './endpoint-timeout.js';
 
 interface OpenAiModelListResponse {
   data?: ProviderModelListRow[];
@@ -212,7 +211,7 @@ export async function fetchTemplateModels(
   apiKey: string,
   baseUrlOverride?: string,
   extraHeaders?: Record<string, string>,
-  timeoutMs: number = TEST_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<FetchTemplateModelsResult> {
   const trimmedOverride = baseUrlOverride?.trim();
   const baseUrl = (trimmedOverride || template.defaultBaseUrl)?.replace(/\/$/, '');
@@ -245,9 +244,8 @@ export async function fetchTemplateModels(
   }
 
   const url = modelsUrl(baseUrl, template);
-  const effectiveTimeoutMs = Number.isFinite(timeoutMs)
-    ? Math.min(120_000, Math.max(1_000, Math.round(timeoutMs)))
-    : TEST_TIMEOUT_MS;
+  const defaultTimeoutMs = endpointModelTimeoutMs(template.id, baseUrl);
+  const effectiveTimeoutMs = clampModelTimeoutMs(timeoutMs ?? defaultTimeoutMs, defaultTimeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
 
@@ -285,7 +283,7 @@ export async function fetchTemplateModels(
     }
 
     if (!response.ok) {
-      const body = await response.text().catch(() => '');
+      const body = await response.text();
       if (logTrace) {
         logTrace(`[fetchTemplateModels] HTTP ${response.status} from ${url}`);
         logTrace(`[fetchTemplateModels] Body: ${body}`);
@@ -309,7 +307,7 @@ export async function fetchTemplateModels(
       };
     }
 
-    const rawBodyText = await response.text().catch(() => '');
+    const rawBodyText = await response.text();
     if (logTrace) {
       logTrace(`[fetchTemplateModels] HTTP ${response.status} from ${url}`);
       logTrace(`[fetchTemplateModels] Body: ${rawBodyText}`);
@@ -335,9 +333,8 @@ export async function fetchTemplateModels(
     }
 
     return { models, baseUrl };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const timedOut = message.includes('abort') || message.includes('Abort');
+  } catch {
+    const timedOut = controller.signal.aborted;
     return {
       models: [],
       baseUrl,

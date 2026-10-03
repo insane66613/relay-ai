@@ -7,18 +7,9 @@ import { loadRegistry, saveRegistry } from './io.js';
 import type { CachedModel, RegistryProvider } from './types.js';
 import { customProviderId, isValidProviderId, slugifyProviderId } from './validate.js';
 import { validateCustomEndpointUrl } from './url-security.js';
+import { endpointModelTimeoutMs } from './endpoint-timeout.js';
 
 export type CustomEndpointKind = 'openai' | 'anthropic';
-
-const DEFAULT_CUSTOM_ENDPOINT_MODEL_TIMEOUT_MS = 30_000;
-
-function customEndpointModelTimeoutMs(): number {
-  const configured = Number(
-    process.env.RELAY_AI_CUSTOM_ENDPOINT_MODEL_TIMEOUT_MS ?? DEFAULT_CUSTOM_ENDPOINT_MODEL_TIMEOUT_MS,
-  );
-  if (!Number.isFinite(configured)) return DEFAULT_CUSTOM_ENDPOINT_MODEL_TIMEOUT_MS;
-  return Math.min(120_000, Math.max(1_000, Math.round(configured)));
-}
 
 export interface AddCustomEndpointInput {
   displayName: string;
@@ -116,7 +107,7 @@ export interface FetchCustomEndpointModelsInput {
 export async function fetchCustomEndpointModels(
   input: FetchCustomEndpointModelsInput,
 ): Promise<{ models: CachedModel[]; baseUrl: string; error?: string; hint?: string }> {
-  const timeoutMs = customEndpointModelTimeoutMs();
+  const timeoutMs = endpointModelTimeoutMs(`custom-${input.kind}`, input.normalizedBaseUrl);
   if (input.kind === 'anthropic') {
     return fetchAnthropicModels(input.normalizedBaseUrl, input.apiKey, input.headers, timeoutMs);
   }
