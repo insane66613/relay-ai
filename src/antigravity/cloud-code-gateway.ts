@@ -276,12 +276,13 @@ export async function startCloudCodeGateway(
           if (trace) log(`[gateway]   provider options: ${JSON.stringify(baseProviderOptions ?? {})}`);
           const isStream = lowerUrl.includes('stream');
           const conversationKey = conversationKeyFromRequest(parsed);
+          const conversationId = antigravityConversationId(parsed, req.headers);
           const requestHeaders = openCodeGoHeaders(
             route.providerId,
             route.baseURL,
-            antigravityConversationId(parsed, req.headers),
+            conversationId,
             route.headers,
-          );
+          ) ?? conversationIdentityHeaders(route, conversationId);
           const requestOptions = {
             ...reasoningEchoOptionsForRoute(route, parsed, reasoningEchoesByConversation),
             ...(requestHeaders ? { requestHeaders } : {}),
